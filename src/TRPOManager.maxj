@@ -8,15 +8,15 @@ import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
 import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
 import com.maxeler.maxcompiler.v2.build.EngineParameters;
 
-public class DemoManager extends CustomManager{
+public class TRPOManager extends CustomManager{
 
-    private static final String s_kernelName  = "DemoKernel";
+    private static final String s_kernelName  = "TRPOKernel";
 
-    DemoManager(EngineParameters ep)
+    TRPOManager(EngineParameters ep)
     {
         super(ep);
 
-        KernelBlock k = addKernel(new DemoKernel(makeKernelParameters(s_kernelName)));
+        KernelBlock k = addKernel(new TRPOKernel(makeKernelParameters(s_kernelName)));
 
         k.getInput("a") <== addStreamFromCPU("a");
         k.getInput("b") <== addStreamFromCPU("b");
@@ -41,7 +41,7 @@ public class DemoManager extends CustomManager{
 
 
     public static void main(String[] args) {
-        DemoManager manager = new DemoManager(new EngineParameters(args));
+        TRPOManager manager = new TRPOManager(new EngineParameters(args));
         manager.createSLiCinterface(interfaceDefault());
         manager.build();
     }
