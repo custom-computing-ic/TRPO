@@ -8,8 +8,8 @@
 
 
 typedef struct {
-        // Input File Name
-        char * InFile;
+        // Model Parameter File Name - weight, bias, std.
+        char * ModelFile;
 //        char * OutFile;
 
 
@@ -29,15 +29,14 @@ typedef struct {
 } TRPOparam;
 
 
-int FVP (TRPOparam param, double * result, double * observ, double * mean, double * std) 
+int FVP (TRPOparam param, double * result, double * observ, double * prob) 
 {
 
         //////////////////// Arguments ////////////////////
         // param: TRPO parameters
         // result: the Fisher-Vector Product
         // observ: list of observations - corresponds to ob_no in modular_rl
-        // mean: list of mean values - corresponds to prob_np in modular_rl
-        // std: list of std values - in TRPO paper std is fixed for all samples in an iteration
+        // prob: list of probablity mean and std values - corresponds to prob_np in modular_rl
         // W: Weights in the neural network         double * W [NumLayers-1];
 
         // Assign Parameters
@@ -45,7 +44,7 @@ int FVP (TRPOparam param, double * result, double * observ, double * mean, doubl
         char * AcFunc = param.AcFunc;
         size_t * LayerSize = param.LayerSize;
         const size_t NumSamples = param.NumSamples;
-
+        char * ModelFile = param.ModelFile;
 
         
         //////////////////// Memory Allocation ////////////////////
@@ -78,28 +77,43 @@ int FVP (TRPOparam param, double * result, double * observ, double * mean, doubl
                 dB[i] = (double *) calloc(LayerSize[i+1], sizeof(double));
         }
         
+        // Allocate Memory for std of diagonal Gaussian distribution
+        double * std = (double *) calloc(LayerSize[NumLayers-1], sizeof(double));
 
         
         //////////////////// Initialisation ////////////////////
         
-        // TODO Init Weights and Bias from File
+        // Open Model File that contains Weights, Bias and std
+	FILE *ModelFilePointer = fopen(ModelFile, "r");
+	if (ModelFilePointer==NULL) {
+		fprintf(stderr, "[ERROR] Cannot open input file [%s]. \n", ModelFile);
+  		return -1;
+	}        
         
-        // Assign Weights
-        W[0][0*2+0] = 0.15;
-        W[0][0*2+1] = 0.25;
-        W[0][1*2+0] = 0.20;
-        W[0][1*2+1] = 0.30;
-        
-        W[1][0*2+0] = 0.40;
-        W[1][0*2+1] = 0.50;
-        W[1][1*2+0] = 0.45;
-        W[1][1*2+1] = 0.55;
+        // Read Weights and Bias from file
+        for (size_t i=0; i<NumLayers-1; ++i) {
+                // Reading Weights W[i]: from Layer[i] to Layer[i+1]
+                size_t curLayerDim = LayerSize[i];
+                size_t nextLayerDim = LayerSize[i+1];
+                for (size_t j=0; j<curLayerDim;++j) {
+                        for (size_t k=0; k<nextLayerDim; ++k) {
+                                fscanf(ModelFilePointer, "%lf", &W[i][j*nextLayerDim+k]);
+                        }
+                }
+                // Reading Bias B[i]: from Layer[i] to Layer[i+1]
+                for (size_t k=0; k<nextLayerDim; ++k) {
+                        fscanf(ModelFilePointer, "%lf", &B[i][k]);
+                }
+        }
 
-        // Assign Bias
-        B[0][0] = 0.35;
-        B[0][1] = 0.35;
-        B[1][0] = 0.60;
-        B[1][1] = 0.60;        
+        // Read std from file
+        for (size_t k=0; k<LayerSize[NumLayers-1]; ++k) {
+                fscanf(ModelFilePointer, "%lf", &std[k]);
+        }
+
+        // Close Model File
+        fclose(ModelFilePointer);
+    
         
         
         //////////////////// Main Loop Over All Samples ////////////////////        
@@ -215,7 +229,7 @@ int FVP (TRPOparam param, double * result, double * observ, double * mean, doubl
         // clean up
         for (size_t i=0; i<NumLayers; ++i) {free(Layer[i]); free(GLayer[i]);}
         for (size_t i=0; i<NumLayers-1; ++i) {free(W[i]); free(dW[i]); free(B[i]); free(dB[i]);}
-
+        free(std);
 
         return 0;
 }
@@ -233,18 +247,17 @@ int main()
         size_t LayerSize [] = {2, 2, 2};
 
         TRPOparam SimpleDataParam;
-        SimpleDataParam.InFile = "SimpleData.txt";
+        SimpleDataParam.ModelFile = "SimpleModel2-2-2.txt";
         SimpleDataParam.NumLayers = 3;
         SimpleDataParam.AcFunc = AcFunc;
         SimpleDataParam.LayerSize = LayerSize;
         SimpleDataParam.NumSamples = 1;
 
-        double dummy1=0;
-        double dummy2=1;
-        double dummy3=2;
+        double dummy_result=0;
+        double dummy_prob=1;
         double observ [] = {0.05, 0.10};
 
-        int FVPStatus = FVP (SimpleDataParam, &dummy1, observ, &dummy2, &dummy3);
+        int FVPStatus = FVP (SimpleDataParam, &dummy_result, observ, &dummy_prob);
 
 
 
