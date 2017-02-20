@@ -10,9 +10,8 @@
 typedef struct {
         // Model Parameter File Name - weight, bias, std.
         char * ModelFile;
-//        char * OutFile;
-
-
+        // Simulation Data File Name - probability and observation
+        char * DataFile;
         // Number of Layers in the network: [Input] --> [Hidden 1] --> [Hidden 2] --> [Output] is 4 layers.
         size_t NumLayers;
         // Activation Function of each layer: t = tanh, l = linear (activate(x)=x), s = sigmoid
@@ -29,12 +28,13 @@ typedef struct {
 } TRPOparam;
 
 
-int FVP (TRPOparam param, double * result, double * observ, double * prob) 
+int FVP (TRPOparam param, double *result, double *input) 
 {
 
         //////////////////// Arguments ////////////////////
         // param: TRPO parameters
         // result: the Fisher-Vector Product
+        // input: the vector to be multiplied with the Fisher Information Matrix
         // observ: list of observations - corresponds to ob_no in modular_rl
         // prob: list of probablity mean and std values - corresponds to prob_np in modular_rl
         // W: Weights in the neural network         double * W [NumLayers-1];
@@ -45,6 +45,12 @@ int FVP (TRPOparam param, double * result, double * observ, double * prob)
         size_t * LayerSize = param.LayerSize;
         const size_t NumSamples = param.NumSamples;
         char * ModelFile = param.ModelFile;
+        char * DataFile = param.DataFile;
+        
+        // Dimension of Observation Space
+        const size_t ObservSpaceDim = LayerSize[0];
+        // Dimension of Action Space
+        const size_t ActionSpaceDim = LayerSize[NumLayers-1];
 
         
         //////////////////// Memory Allocation ////////////////////
@@ -76,17 +82,23 @@ int FVP (TRPOparam param, double * result, double * observ, double * prob)
                 B[i] = (double *) calloc(LayerSize[i+1], sizeof(double));
                 dB[i] = (double *) calloc(LayerSize[i+1], sizeof(double));
         }
+
+        // Allocate Memory for Observation
+        double * observ = (double *) calloc(NumSamples*ObservSpaceDim, sizeof(double));
         
-        // Allocate Memory for std of diagonal Gaussian distribution
-        double * std = (double *) calloc(LayerSize[NumLayers-1], sizeof(double));
+        // Allocate Memory for Probability Mean
+        double * mean = (double *) calloc(NumSamples*ActionSpaceDim, sizeof(double));
+
+        // Allocate Memory for Probability Std
+        double * std = (double *) calloc(ActionSpaceDim, sizeof(double));
 
         
-        //////////////////// Initialisation ////////////////////
+        //////////////////// Parameter Initialisation ////////////////////
         
         // Open Model File that contains Weights, Bias and std
 	FILE *ModelFilePointer = fopen(ModelFile, "r");
 	if (ModelFilePointer==NULL) {
-		fprintf(stderr, "[ERROR] Cannot open input file [%s]. \n", ModelFile);
+		fprintf(stderr, "[ERROR] Cannot open Model File [%s]. \n", ModelFile);
   		return -1;
 	}        
         
@@ -107,14 +119,39 @@ int FVP (TRPOparam param, double * result, double * observ, double * prob)
         }
 
         // Read std from file
-        for (size_t k=0; k<LayerSize[NumLayers-1]; ++k) {
+        for (size_t k=0; k<ActionSpaceDim; ++k) {
                 fscanf(ModelFilePointer, "%lf", &std[k]);
         }
 
         // Close Model File
         fclose(ModelFilePointer);
-    
         
+        
+        //////////////////// Read Simulation Data ////////////////////
+        
+        // Open Data File that contains Mean, std and Observation
+	FILE *DataFilePointer = fopen(DataFile, "r");
+	if (DataFilePointer==NULL) {
+		fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", DataFile);
+  		return -1;
+	}  
+        
+        // Read Mean, std and Observation
+        for (size_t i=0; i<NumSamples; ++i) {
+                // Read Mean
+                for (size_t j=0; j<ActionSpaceDim; ++j) {
+                        fscanf(DataFilePointer, "%lf", &mean[i*ActionSpaceDim+j]);
+                }
+                // Read Std
+                for (size_t j=0; j<ActionSpaceDim; ++j) {
+                        fscanf(DataFilePointer, "%lf", &std[j]);
+                }
+                // Read Observation
+                for (size_t j=0; j<ObservSpaceDim; ++j) {
+                        fscanf(DataFilePointer, "%lf", &observ[i*ObservSpaceDim+j]);
+                }
+        }
+
         
         //////////////////// Main Loop Over All Samples ////////////////////        
         
@@ -123,7 +160,7 @@ int FVP (TRPOparam param, double * result, double * observ, double * prob)
                 //////////////////// Forward Propagation ////////////////////
         
                 // Assign Input Values
-                for (size_t i=0; i<LayerSize[0]; ++i) Layer[0][i] = observ[iter*LayerSize[0]+i];       
+                for (size_t i=0; i<ObservSpaceDim; ++i) Layer[0][i] = observ[iter*ObservSpaceDim+i];
         
                 // Forward Propagation
                 for (size_t i=0; i<NumLayers-1; ++i) {
@@ -159,19 +196,22 @@ int FVP (TRPOparam param, double * result, double * observ, double * prob)
                         }
                 }
                 
-                // Final Output
-                for (size_t i=0; i<LayerSize[NumLayers-1]; ++i) {
+                // Print Final Output
+                for (size_t i=0; i<ActionSpaceDim; ++i) {
                         printf("output[%zu] = %f \n", i, Layer[NumLayers-1][i]);
                 }
 
-                // TODO: *0.1 in the final layer for TRPO
-
                 
-                //////////////////// Backward Propagation ////////////////////                 
+                //////////////////// Backward Propagation - First Round ////////////////////                 
 
         
-                // Assign the derivative of Loss Func w.r.t. the output values from the final layer
-                // TODO Assign according to KL Divergence
+                // Assign the derivative of KL w.r.t. the output values from the final layer
+                for (size_t i=0; i<ActionSpaceDim; ++i) {
+//                        GLayer[NumLayers-1][i] = 0.1 * ()
+                }
+                
+                
+                
                 GLayer[NumLayers-1][0] = Layer[NumLayers-1][0] - 0.01;
                 GLayer[NumLayers-1][1] = Layer[NumLayers-1][1] - 0.99;                
 
@@ -229,7 +269,7 @@ int FVP (TRPOparam param, double * result, double * observ, double * prob)
         // clean up
         for (size_t i=0; i<NumLayers; ++i) {free(Layer[i]); free(GLayer[i]);}
         for (size_t i=0; i<NumLayers-1; ++i) {free(W[i]); free(dW[i]); free(B[i]); free(dB[i]);}
-        free(std);
+        free(observ); free(mean); free(std);
 
         return 0;
 }
@@ -248,16 +288,16 @@ int main()
 
         TRPOparam SimpleDataParam;
         SimpleDataParam.ModelFile = "SimpleModel2-2-2.txt";
+        SimpleDataParam.DataFile = "SimpleModel2-2-2Data.txt";
         SimpleDataParam.NumLayers = 3;
         SimpleDataParam.AcFunc = AcFunc;
         SimpleDataParam.LayerSize = LayerSize;
         SimpleDataParam.NumSamples = 1;
 
         double dummy_result=0;
-        double dummy_prob=1;
-        double observ [] = {0.05, 0.10};
+        double dummy_input=1;
 
-        int FVPStatus = FVP (SimpleDataParam, &dummy_result, observ, &dummy_prob);
+        int FVPStatus = FVP (SimpleDataParam, &dummy_result, &dummy_input);
 
 
 
