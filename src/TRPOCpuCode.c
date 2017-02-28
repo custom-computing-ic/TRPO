@@ -92,8 +92,8 @@ int FVP (TRPOparam param, double *Result, double *Input)
         B[i] = (double *) calloc(LayerSize[i+1], sizeof(double));
     }
 
-    // Std[i]: standard deviation for action dimension #i in the Diagonal Gaussian Distribution
-    double * Std = (double *) calloc(ActionSpaceDim, sizeof(double));
+    // LogStd[i]: log standard deviation for action dimension #i in the Diagonal Gaussian Distribution
+    double * LogStd = (double *) calloc(ActionSpaceDim, sizeof(double));
 
 
     //////////////////// Memory Allocation - Input Vector ////////////////////
@@ -110,8 +110,8 @@ int FVP (TRPOparam param, double *Result, double *Input)
         VB[i] = (double *) calloc(LayerSize[i+1], sizeof(double));
     }
     
-    // Allocate Memory for Input Vector corresponding to Std
-    double * VStd = (double *) calloc(ActionSpaceDim, sizeof(double));
+    // Allocate Memory for Input Vector corresponding to LogStd
+    double * VLogStd = (double *) calloc(ActionSpaceDim, sizeof(double));
 
 
     //////////////////// Memory Allocation - Simulation Data ////////////////////
@@ -121,14 +121,15 @@ int FVP (TRPOparam param, double *Result, double *Input)
     // Mean: list of probablity mean values - corresponds to the 'mean' part of prob_np in modular_rl
     // Remarks: due to the specific setting of the experienments in the TRPO paper, 
     //          Std is the same for all samples in each simulation iteration,
-    //          so we just use the memory space allocated for Neural Network Std above, i.e. Std[i]
+    //          so we just allocate Std memory space for one sample and use it for all samples.
     //          The general case should be another vector of Std with size NumSamples*ActionSpaceDim
     double * Observ = (double *) calloc(NumSamples*ObservSpaceDim, sizeof(double));
-    double * Mean = (double *) calloc(NumSamples*ActionSpaceDim, sizeof(double));
+    double * Mean   = (double *) calloc(NumSamples*ActionSpaceDim, sizeof(double));
+    double * Std    = (double *) calloc(ActionSpaceDim, sizeof(double));
 
     // Allocate Memory for Average Sample Mean and Average Sample Mean Square
     // Remarks: These values are statistics calculated from the samples, to be used in the algorithm
-    double * AvgSampleMean = (double *) calloc(ActionSpaceDim, sizeof(double));
+    double * AvgSampleMean   = (double *) calloc(ActionSpaceDim, sizeof(double));
     double * AvgSampleMeanSq = (double *) calloc(ActionSpaceDim, sizeof(double));
     
     
@@ -136,10 +137,10 @@ int FVP (TRPOparam param, double *Result, double *Input)
 
     // Layer[i] : Memory of each layer's outputs, i.e. y_i
     // GLayer[I]: Gradient of KL w.r.t. the pre-activation values in Layer[i], i.e. d(KL)/d(x_i)
-    double * Layer [NumLayers];
+    double * Layer  [NumLayers];
     double * GLayer [NumLayers];
     for (size_t i=0; i<NumLayers; ++i) {
-        Layer[i] = (double *) calloc(LayerSize[i], sizeof(double));
+        Layer[i]  = (double *) calloc(LayerSize[i], sizeof(double));
         GLayer[i] = (double *) calloc(LayerSize[i], sizeof(double));
     }
 
@@ -159,7 +160,7 @@ int FVP (TRPOparam param, double *Result, double *Input)
 
     //////////////////// Memory Allocation - Pearlmutter Forward and Backward Propagation ////////////////////
 
-    // RyLayer[i] : R{} of each layer's outputs, i.e. R{y_i}
+    // RyLayer[i]: R{} of each layer's outputs, i.e. R{y_i}
     // RxLayer[i]: R{} of each layer's pre-activated outputs, i.e. R{x_i}
     // RGLayer[I]: R{} Gradient of KL w.r.t. the pre-activation values in Layer[i], i.e. R{d(KL)/d(x_i)}
     double * RyLayer [NumLayers];
@@ -171,9 +172,9 @@ int FVP (TRPOparam param, double *Result, double *Input)
         RGLayer[i] = (double *) calloc(LayerSize[i], sizeof(double));
     }
 
-    // RGW[i]: R{} Gradient of KL w.r.t to Neural Network Weight W[i], i.e. R{d(KL)/d(W[i])}
-    // RGB[i]: R{} Gradient of KL w.r.t to Neural Network Bias B[i], i.e. R{d(KL)/d(B[i])}
-    // There is one-to-one correspondence between: RGW[i] and W[i], RGB[i] and B[i], RGStd[i] and Std[i]
+    // RGW[i]: R{} Gradient of KL w.r.t. to Neural Network Weight W[i], i.e. R{d(KL)/d(W[i])}
+    // RGB[i]: R{} Gradient of KL w.r.t. to Neural Network Bias B[i], i.e. R{d(KL)/d(B[i])}
+    // There is one-to-one correspondence between: RGW[i] and W[i], RGB[i] and B[i]
     double * RGW [NumLayers-1];
     double * RGB [NumLayers-1];
     for (size_t i=0; i<NumLayers-1; ++i) {
@@ -181,10 +182,10 @@ int FVP (TRPOparam param, double *Result, double *Input)
         RGB[i] = (double *) calloc(LayerSize[i+1], sizeof(double));
     }
 
-    // RStd[i]: R{} of Std[i], i.e. R{Std[i]}
-    // RGStd[i]: R{} Gradient of KL w.r.t standard deviation Std[i], i.e. R{d(KL)/d(Std[i])}
-    double * RStd = (double *) calloc(ActionSpaceDim, sizeof(double));
-    double * RGStd = (double *) calloc(ActionSpaceDim, sizeof(double));
+    //  RStd[i]: R{} of Std[i], i.e. R{Std[i]}
+    // RGStd[i]: R{} Gradient of KL w.r.t. log standard deviation LogStd[i], i.e. R{d(KL)/d(LogStd[i])}
+    double * RStd     = (double *) calloc(ActionSpaceDim, sizeof(double));
+    double * RGLogStd = (double *) calloc(ActionSpaceDim, sizeof(double));
     
     
     //////////////////// Load Neural Network ////////////////////
@@ -199,7 +200,7 @@ int FVP (TRPOparam param, double *Result, double *Input)
     // Read Weights and Bias from file
     for (size_t i=0; i<NumLayers-1; ++i) {
         // Reading Weights W[i]: from Layer[i] to Layer[i+1]
-        size_t curLayerDim = LayerSize[i];
+        size_t curLayerDim  = LayerSize[i];
         size_t nextLayerDim = LayerSize[i+1];
         for (size_t j=0; j<curLayerDim;++j) {
             for (size_t k=0; k<nextLayerDim; ++k) {
@@ -212,10 +213,10 @@ int FVP (TRPOparam param, double *Result, double *Input)
         }
     }
 
-    // Read std from file
+    // Read LogStd from file
     // Remarks: actually this std will be overwritten by the std from the datafile
     for (size_t k=0; k<ActionSpaceDim; ++k) {
-        fscanf(ModelFilePointer, "%lf", &Std[k]);
+        fscanf(ModelFilePointer, "%lf", &LogStd[k]);
     }
 
     // Close Model File
@@ -226,7 +227,7 @@ int FVP (TRPOparam param, double *Result, double *Input)
     
     pos = 0;
     for (size_t i=0; i<NumLayers-1; ++i) {
-        size_t curLayerDim = LayerSize[i];
+        size_t curLayerDim  = LayerSize[i];
         size_t nextLayerDim = LayerSize[i+1];
         for (size_t j=0; j<curLayerDim;++j) {
             for (size_t k=0; k<nextLayerDim; ++k) {
@@ -242,7 +243,7 @@ int FVP (TRPOparam param, double *Result, double *Input)
         }
     }
     for (size_t k=0; k<ActionSpaceDim; ++k) {
-        VStd[k] = Input[pos];
+        VLogStd[k] = Input[pos];
         Result[pos] = 0;
         pos++;
     }
@@ -257,7 +258,7 @@ int FVP (TRPOparam param, double *Result, double *Input)
   		return -1;
 	}  
     
-    // Read Mean, std and Observation
+    // Read Mean, Std and Observation
     // Remarks: Std is the same for all samples, and appears in every line in the data file
     //          so we are reading the same Std again and again to the same place.
     for (size_t i=0; i<NumSamples; ++i) {
@@ -281,12 +282,12 @@ int FVP (TRPOparam param, double *Result, double *Input)
     // Compute Average Sample Mean and Average Sample Mean Square
     for (size_t i=0; i<NumSamples; ++i) {
         for (size_t j=0; j<ActionSpaceDim; ++j) {
-            AvgSampleMean[j] += Mean[i*ActionSpaceDim+j];
+            AvgSampleMean[j]   += Mean[i*ActionSpaceDim+j];
             AvgSampleMeanSq[j] += Mean[i*ActionSpaceDim+j] * Mean[i*ActionSpaceDim+j];
         }
     }
     for (size_t j=0; j<ActionSpaceDim; ++j) {
-        AvgSampleMean[j] = AvgSampleMean[j] / (double)NumSamples;
+        AvgSampleMean[j]   = AvgSampleMean[j]   / (double)NumSamples;
         AvgSampleMeanSq[j] = AvgSampleMeanSq[j] / (double)NumSamples;
     }
     
@@ -306,21 +307,19 @@ int FVP (TRPOparam param, double *Result, double *Input)
             // Propagate from Layer[i] to Layer[i+1]
             for (size_t j=0; j<LayerSize[i+1]; ++j) {
                 
-                // Calculating item[j] in next layer
+                // Calculating pre-activated value for item[j] in next layer
                 Layer[i+1][j] = B[i][j];
                 for (size_t k=0; k<LayerSize[i]; ++k) {
                     // From Neuron #k in Layer[i] to Neuron #j in Layer[i+1]
                     Layer[i+1][j] += Layer[i][k] * W[i][k*LayerSize[i+1]+j];
                 }
             
-                 // Apply Activation Function
+                // Apply Activation Function
                 switch (AcFunc[i+1]) {
                     // Linear Activation Function: Ac(x) = (x)
                     case 'l': {break;}
                     // tanh() Activation Function
                     case 't': {Layer[i+1][j] = tanh(Layer[i+1][j]); break;}
-                    // 0.1*tanh() Activation Function
-                    case 'T': {Layer[i+1][j] = 0.1*tanh(Layer[i+1][j]); break;}
                     // 0.1x Activation Function
                     case 'o': {Layer[i+1][j] = 0.1*Layer[i+1][j]; break;}
                     // sigmoid Activation Function
@@ -334,23 +333,27 @@ int FVP (TRPOparam param, double *Result, double *Input)
             }
         }
 
-        // TODO: To check whether the forward propagation output is correct:
-        // Assert Layer[NumLayers-1][i] = Mean[iter*ActionSpaceDim+i]
+        // Check whether the forward propagation output is correct
+        for (size_t i=0; i<ActionSpaceDim; ++i) {
+            double output   = Layer[NumLayers-1][i];
+            double expected = Mean[iter*ActionSpaceDim+i];
+            double err      = abs( (output - expected) / expected ) * 100;
+            if (err>0.1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
+        }
+
         
         //////////////////// Ordinary Backward Propagation ////////////////////         
 
         // Gradient Initialisation
         // Assign the derivative of KL w.r.t. Mean (output values from the final layer) and Std
         for (size_t i=0; i<ActionSpaceDim; ++i) {
-            double Mean_i = Mean[iter*ActionSpaceDim+i];
-            GLayer[NumLayers-1][i] = (Mean_i - AvgSampleMean[i]) / (Std[i] * Std[i]);
-            GStd[i] = 2.0 / Std[i] - (Mean_i*(Mean_i-2*AvgSampleMean[i]) + AvgSampleMeanSq[i]) / (Std[i]*Std[i]*Std[i]);
+            GLayer[NumLayers-1][i] = 0;
+            GStd[i] = 0;
         }
         
 //        The two equation below is for the SimpleModel2-2-2
 //        GLayer[NumLayers-1][0] = Layer[NumLayers-1][0] - 0.01;
-//        GLayer[NumLayers-1][1] = Layer[NumLayers-1][1] - 0.99;        
-
+//        GLayer[NumLayers-1][1] = Layer[NumLayers-1][1] - 0.99;
 
         // Backward Propagation
         for (size_t i=NumLayers-1; i>0; --i) {
@@ -364,15 +367,13 @@ int FVP (TRPOparam param, double *Result, double *Input)
                     case 'l': {break;}
                     // tanh() Activation Function: tanh' = 1 - tanh^2
                     case 't': {GLayer[i][j] = GLayer[i][j] * (1- Layer[i][j] * Layer[i][j]); break;}
-                    // 0.1*tanh() Activation Function: (0.1*tanh)' = 0.1*(1 - 100*(0.1*tanh)^2)
-                    case 'T': {GLayer[i][j] = GLayer[i][j] * 0.1* (1- 100.0*Layer[i][j] * Layer[i][j]); break;}
                     // 0.1x Activation Function
                     case 'o': {GLayer[i][j] = 0.1 * GLayer[i][j]; break;}
                     // sigmoid Activation Function: sigmoid' = sigmoid * (1 - sigmoid)
                     case 's': {GLayer[i][j] = GLayer[i][j] * Layer[i][j] * (1- Layer[i][j]); break;}
                     // Default: Activation Function not supported
                     default: {
-                        fprintf(stderr, "[ERROR] Activation Function for Layer [%zu] is %c. Unsupported.\n", i, AcFunc[i]);
+                        fprintf(stderr, "[ERROR] Activation Function for Layer[%zu] is %c. Unsupported.\n", i, AcFunc[i]);
                         return -1;
                     }
                 }
@@ -399,29 +400,6 @@ int FVP (TRPOparam param, double *Result, double *Input)
             }
         
         }
-        
-        // Remarks: This is unnecessary for the algorithm, but can be used as a correctness check
-        // Calculating the Inner Product <Gradient, Input>
-        double GradVecProduct = 0;
-        for (size_t i=0; i<NumLayers-1; ++i) {
-            // Calculating partial Inner Product <Weights W[i], Input>
-            size_t curLayerDim = LayerSize[i];
-            size_t nextLayerDim = LayerSize[i+1];
-            for (size_t j=0; j<curLayerDim;++j) {
-                for (size_t k=0; k<nextLayerDim; ++k) {
-                    GradVecProduct += GW[i][j*nextLayerDim+k] * VW[i][j*nextLayerDim+k];
-                }
-            }
-            // Calculating partial Inner Product <Bias B[i], Input>
-            for (size_t k=0; k<nextLayerDim; ++k) {
-                GradVecProduct += GB[i][k] * VB[i][k];
-            }
-        }
-        // Calculating partial Inner Product <Std, Input>
-        for (size_t k=0; k<ActionSpaceDim; ++k) {
-            GradVecProduct += Std[k] * VStd[k];
-        }
-//        printf("Gradient-Vector Product is %lf\n", GradVecProduct);
 
         
         //////////////////// Pearlmutter Forward Propagation ////////////////////           
@@ -453,15 +431,13 @@ int FVP (TRPOparam param, double *Result, double *Input)
                     case 'l': {RyLayer[i+1][j] = RxLayer[i+1][j]; break;}
                     // tanh() Activation Function: tanh' = 1 - tanh^2
                     case 't': {RyLayer[i+1][j] = RxLayer[i+1][j] * (1- Layer[i+1][j] * Layer[i+1][j]); break;}
-                    // 0.1*tanh() Activation Function: (0.1*tanh)' = 0.1*(1 - 100*(0.1*tanh)^2) = (0.1-10*y^2)
-                    case 'T': {RyLayer[i+1][j] = RxLayer[i+1][j] * (0.1 - 10*Layer[i+1][j]*Layer[i+1][j]); break;}
                     // 0.1x Activation Function
                     case 'o': {RyLayer[i+1][j] = 0.1 * RxLayer[i+1][j]; break;}
                     // sigmoid Activation Function: sigmoid' = sigmoid * (1 - sigmoid)
                     case 's': {RyLayer[i+1][j] = RxLayer[i+1][j] * Layer[i+1][j] * (1- Layer[i+1][j]); break;}
                     // Default: Activation Function not supported
                     default: {
-                        fprintf(stderr, "[ERROR] Activation Function for Layer [%zu] is %c. Unsupported.\n", i+1, AcFunc[i+1]);
+                        fprintf(stderr, "[ERROR] Activation Function for Layer[%zu] is %c. Unsupported.\n", i+1, AcFunc[i+1]);
                         return -1;
                     }
                 }
@@ -469,21 +445,23 @@ int FVP (TRPOparam param, double *Result, double *Input)
         }
         
         // Calculating R{Std}
-        for (size_t i=0; i<ActionSpaceDim; ++i) RStd[i] = VStd[i];
-
+        // Remarks: R{Std} is w.r.t. to Std. 
+        for (size_t i=0; i<ActionSpaceDim; ++i) {
+            RStd[i] = Std[i] * VLogStd[i];
+        }
 
         //////////////////// Pearlmutter Backward Propagation ////////////////////
 
 
         // Gradient Initialisation
         // Calculating R{} Gradient of KL w.r.t. output values from the final layer, i.e. R{d(KL)/d(mean_i)}
-        // Calculating R{} Gradient of KL w.r.t. Std, i.e. R{d(KL)/d(Std[i])}
+        // Calculating R{} Gradient of KL w.r.t. LogStd, i.e. R{d(KL)/d(LogStd[i])}
         for (size_t i=0; i<ActionSpaceDim; ++i) {
-            RGLayer[NumLayers-1][i] = RyLayer[NumLayers-1][i] / (Std[i] * Std[i]) - GLayer[NumLayers-1][i] * (2*RStd[i]/Std[i]);
-            double RGStd_i_part1 = GStd[i] * (-3 * RStd[i] / Std[i]) + 4 * RStd[i] / (Std[i] * Std[i]);
-            double RGStd_i_part2 = -2*(Layer[NumLayers-1][i] - AvgSampleMean[i]) * RyLayer[NumLayers-1][i] / (Std[i]*Std[i]*Std[i]);
-            RGStd[i] =  RGStd_i_part1 + RGStd_i_part2;
+            double StdSq = Std[i] * Std[i];
+            RGLayer[NumLayers-1][i] = RyLayer[NumLayers-1][i]/StdSq - 2*GLayer[NumLayers-1][i]/Std[i]*RStd[i];
+            RGLogStd[i] = 2*RStd[i]/Std[i];
         }
+
 
         // Backward Propagation
         for (size_t i=NumLayers-1; i>0; --i) {
@@ -499,11 +477,6 @@ int FVP (TRPOparam param, double *Result, double *Input)
                     // tanh() Activation Function: tanh' = 1 - tanh^2
                     case 't': {
                         RGLayer[i][j] = (1-Layer[i][j]*Layer[i][j])*RGLayer[i][j] - 2*Layer[i][j]*GLayer[i][j]*RxLayer[i][j];
-                        break;
-                    }
-                    // 0.1*tanh() Activation Function: (0.1*tanh)' = 0.1*(1 - 100*(0.1*tanh)^2) = (0.1-10*y^2)
-                    case 'T': {
-                        RGLayer[i][j] = (0.1-10*Layer[i][j]*Layer[i][j])*RGLayer[i][j] - 20*Layer[i][j]*GLayer[i][j]*RxLayer[i][j]; 
                         break;
                     }
                     // 0.1x Activation Function
@@ -560,7 +533,7 @@ int FVP (TRPOparam param, double *Result, double *Input)
             }
         }
         for (size_t k=0; k<ActionSpaceDim; ++k) {
-            Result[pos] += RGStd[k];
+            Result[pos] += RGLogStd[k];
             pos++;
         }
 
@@ -586,8 +559,9 @@ int FVP (TRPOparam param, double *Result, double *Input)
         free(W[i]); free(VW[i]); free(GW[i]); free(RGW[i]);
         free(B[i]); free(VB[i]); free(GB[i]); free(RGB[i]);
     }
-    free(Std); free(VStd); free(GStd); free(RStd); free(RGStd);
-    free(Observ); free(Mean); 
+    free(LogStd); free(VLogStd); free(RGLogStd);
+    free(GStd); free(RStd);
+    free(Observ); free(Mean); free(Std);
     free(AvgSampleMean); free(AvgSampleMeanSq);
 
     return 0;
@@ -601,8 +575,8 @@ void SimpleTest() {
     size_t LayerSize [] = {2, 2, 2};
 
     TRPOparam Param;
-    Param.ModelFile  = "SimpleModel2-2-2.txt";
-    Param.DataFile   = "SimpleModel2-2-2Data.txt";
+    Param.ModelFile  = "SimpleTestModel.txt";
+    Param.DataFile   = "SimpleTestData.txt";
     Param.NumLayers  = 3;
     Param.AcFunc     = AcFunc;
     Param.LayerSize  = LayerSize;
@@ -610,7 +584,7 @@ void SimpleTest() {
     Param.CG_Damping = 0.1;
 
     size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
-	double * input   = (double *) calloc(NumParams, sizeof(double));
+    double * input   = (double *) calloc(NumParams, sizeof(double));
     double * result  = (double *) calloc(NumParams, sizeof(double));
 
     int FVPStatus = FVP(Param, result, input);
@@ -621,33 +595,116 @@ void SimpleTest() {
 }
 
 
+void PendulumTest()
+{
+	
+    // Pendulum-v0
+    char AcFunc [] = {'l', 't', 'l'};
+    size_t LayerSize [] = {3, 4, 1};
+
+    char * ModelFileName = "PendulumTestModel.txt";
+    char * DataFileName  = "PendulumTestData.txt";
+    char * FVPFileName   = "PendulumTestFVP.txt";
+
+    TRPOparam Param;
+    Param.ModelFile  = ModelFileName;
+    Param.DataFile   = DataFileName;
+    Param.NumLayers  = 3;
+    Param.AcFunc     = AcFunc;
+    Param.LayerSize  = LayerSize;
+    Param.NumSamples = 200;
+    Param.CG_Damping = 0;
+
+    // Open Simulation Data File that contains test data
+    FILE *DataFilePointer = fopen(FVPFileName, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
+        return;
+    }
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double * input   = (double *) calloc(NumParams, sizeof(double));
+    double * result  = (double *) calloc(NumParams, sizeof(double));
+    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
+    
+    // Read Input and Expect
+    for (size_t i=0; i<NumParams; ++i) {
+         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
+    }
+    fclose(DataFilePointer);
+
+    int FVPStatus = FVP(Param, result, input);	
+    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
+    
+    // Check Result
+    size_t pos = 0;
+    for (size_t i=0; i<Param.NumLayers-1; ++i) {
+        size_t curLayerDim = LayerSize[i];
+        size_t nextLayerDim = LayerSize[i+1];
+        printf("\n");
+        for (size_t j=0; j<curLayerDim;++j) {
+            for (size_t k=0; k<nextLayerDim; ++k) {
+                printf("FVP W[%zu][%zu][%zu] expected=%f, result=%f\n", i, j, k, expect[pos], result[pos]);
+                pos++;
+            }
+        }
+        for (size_t k=0; k<nextLayerDim; ++k) {
+            printf("FVP Bias[%zu][%zu] expected=%f, result=%f\n", i, k, expect[pos], result[pos]);
+            pos++;
+        }
+    }
+    for (size_t k=0; k<LayerSize[Param.NumLayers-1]; ++k) {
+        printf("\nFVP LogStd[%zu] expected=%f, result=%f\n", k, expect[pos], result[pos]);
+        pos++;
+    }
+    
+    double percentage_err = 0;
+    for (size_t i=0; i<NumParams; ++i) {
+        double cur_percentage_err = abs((result[i]-expect[i])/expect[i]);
+    	if (expect[i] != 0) percentage_err += cur_percentage_err;
+    }
+    percentage_err = percentage_err * 100.0 / (double)NumParams;
+    printf("\n[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);    
+
+    // Clean Up    
+    free(input); free(result); free(expect);
+    
+    return;
+}
+
 void SwimmerTest()
 {
 	
     // Swimmer-v1
-    char AcFunc [] = {'l', 't', 't', 'o'};
+    char AcFunc [] = {'l', 't', 't', 'l'};
     size_t LayerSize [] = {8, 64, 64, 2};
 
+
+    char * ModelFileName = "Mon Feb 27 15:01:54 2017.weight.4868.txt";
+    char * DataFileName  = "Mon Feb 27 15:01:54 2017.data.26000.txt";
+    char * FVPFileName   = "Mon Feb 27 15:01:54 2017.TestFVP.4868.txt";
+
+
     TRPOparam Param;
-    Param.ModelFile  = "Thu Feb 23 16:04:28 2017.weight.4868.txt";
-    Param.DataFile   = "Thu Feb 23 16:04:28 2017.data.26000.txt";
+    Param.ModelFile  = ModelFileName;
+    Param.DataFile   = DataFileName;
     Param.NumLayers  = 4;
     Param.AcFunc     = AcFunc;
     Param.LayerSize  = LayerSize;
-    Param.NumSamples = 26000;
+    Param.NumSamples = 4;
     Param.CG_Damping = 0.1;
 
     // Open Simulation Data File that contains test data
-    char * TestFVPFile = "Thu Feb 23 16:04:28 2017.TestFVP.4868.txt";
-	FILE *DataFilePointer = fopen(TestFVPFile, "r");
-	if (DataFilePointer==NULL) {
-		fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", TestFVPFile);
-  		return;
-	}
-	
-	// Memory Allocation
-	size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
-	double * input   = (double *) calloc(NumParams, sizeof(double));
+    FILE *DataFilePointer = fopen(FVPFileName, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
+        return;
+    }
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double * input   = (double *) calloc(NumParams, sizeof(double));
     double * result  = (double *) calloc(NumParams, sizeof(double));
     double * expect  = (double *) calloc(NumParams, sizeof(double)); 
     
@@ -662,13 +719,15 @@ void SwimmerTest()
     
     // Check Result
     double percentage_err = 0;
-    for (size_t i=0; i<NumParams; ++i) {
-    	if (abs(expect[i]) > 1e-10) percentage_err += abs( (result[i]-expect[i]) / expect[i] );
+    for (size_t i=0; i<NumParams; ++i) {        
+        double cur_percentage_err = abs((result[i]-expect[i])/expect[i]);
+    	if (expect[i] != 0) percentage_err += cur_percentage_err;
+    	if (cur_percentage_err > 10) printf("[%zu] Result = %e, Expect = %e. %.4f%% Difference\n", i, result[i], expect[i], cur_percentage_err*100);
     }
     percentage_err = percentage_err * 100.0 / (double)NumParams;
-    printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);    
 
-	// Clean Up    
+    // Clean Up    
     free(input); free(result); free(expect);
     
     return;
@@ -681,8 +740,9 @@ int main()
 
     //////////////////// Fisher Vector Product Computation ////////////////////
     
-//	SimpleTest();
-	SwimmerTest();
+	SimpleTest();
+    PendulumTest();
+//	SwimmerTest();
 
 
     //////////////////// FPGA ////////////////////
