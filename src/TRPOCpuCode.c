@@ -598,7 +598,7 @@ void SimpleTest() {
 void PendulumTest()
 {
 	
-    // Pendulum-v0
+    // Simplified version of Pendulum-v0 with hidden_size set to 4
     char AcFunc [] = {'l', 't', 'l'};
     size_t LayerSize [] = {3, 4, 1};
 
@@ -638,6 +638,7 @@ void PendulumTest()
     if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
     
     // Check Result
+    printf("\n--------------------------- Pendulum Test ---------------------------");
     size_t pos = 0;
     for (size_t i=0; i<Param.NumLayers-1; ++i) {
         size_t curLayerDim = LayerSize[i];
@@ -665,7 +666,8 @@ void PendulumTest()
     	if (expect[i] != 0) percentage_err += cur_percentage_err;
     }
     percentage_err = percentage_err * 100.0 / (double)NumParams;
-    printf("\n[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);    
+    printf("\n[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("---------------------------------------------------------------------\n\n");
 
     // Clean Up    
     free(input); free(result); free(expect);
@@ -681,9 +683,9 @@ void SwimmerTest()
     size_t LayerSize [] = {8, 64, 64, 2};
 
 
-    char * ModelFileName = "Mon Feb 27 15:01:54 2017.weight.4868.txt";
-    char * DataFileName  = "Mon Feb 27 15:01:54 2017.data.26000.txt";
-    char * FVPFileName   = "Mon Feb 27 15:01:54 2017.TestFVP.4868.txt";
+    char * ModelFileName = "SwimmerTestModel.txt";
+    char * DataFileName  = "SwimmerTestData.txt";
+    char * FVPFileName   = "SwimmerTestFVP.txt";
 
 
     TRPOparam Param;
@@ -692,8 +694,8 @@ void SwimmerTest()
     Param.NumLayers  = 4;
     Param.AcFunc     = AcFunc;
     Param.LayerSize  = LayerSize;
-    Param.NumSamples = 4;
-    Param.CG_Damping = 0.1;
+    Param.NumSamples = 26000;
+    Param.CG_Damping = 0;
 
     // Open Simulation Data File that contains test data
     FILE *DataFilePointer = fopen(FVPFileName, "r");
@@ -720,12 +722,14 @@ void SwimmerTest()
     // Check Result
     double percentage_err = 0;
     for (size_t i=0; i<NumParams; ++i) {        
-        double cur_percentage_err = abs((result[i]-expect[i])/expect[i]);
-    	if (expect[i] != 0) percentage_err += cur_percentage_err;
-    	if (cur_percentage_err > 10) printf("[%zu] Result = %e, Expect = %e. %.4f%% Difference\n", i, result[i], expect[i], cur_percentage_err*100);
+        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
+    	if (expect[i] != 0) percentage_err += cur_err;
+    	if (cur_err>0.1) printf("FVP[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
     }
-    percentage_err = percentage_err * 100.0 / (double)NumParams;
-    printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);    
+    percentage_err = percentage_err / (double)NumParams;
+    printf("--------------------------- Swimmer Test ----------------------------\n");
+    printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("---------------------------------------------------------------------\n\n");
 
     // Clean Up    
     free(input); free(result); free(expect);
@@ -740,9 +744,9 @@ int main()
 
     //////////////////// Fisher Vector Product Computation ////////////////////
     
-	SimpleTest();
+    SimpleTest();
     PendulumTest();
-//	SwimmerTest();
+    SwimmerTest();
 
 
     //////////////////// FPGA ////////////////////

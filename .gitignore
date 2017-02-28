@@ -17,3 +17,4 @@ TRPO_*
 # git unignore setting
 !SimpleTest*
 !PendulumTest*
+!SwimmerTest*
