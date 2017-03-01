@@ -1172,7 +1172,7 @@ void SwimmerTest()
     Param.AcFunc     = AcFunc;
     Param.LayerSize  = LayerSize;
     Param.NumSamples = 26000;
-    Param.CG_Damping = 0;
+    Param.CG_Damping = 0.1;
 
     // Open Simulation Data File that contains test data
     FILE *DataFilePointer = fopen(FVPFileName, "r");
@@ -1233,7 +1233,7 @@ void SwimmerCGTest()
     Param.AcFunc     = AcFunc;
     Param.LayerSize  = LayerSize;
     Param.NumSamples = 26000;
-    Param.CG_Damping = 0;
+    Param.CG_Damping = 0.1;
 
     // Open Simulation Data File that contains test data
     FILE *DataFilePointer = fopen(CGFileName, "r");
