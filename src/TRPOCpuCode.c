@@ -972,6 +972,81 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
 }
 
 
+int CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double ResidualTh)
+{
+
+    //////////////////// Conjugate Gradient ////////////////////
+
+    // This function implements Conjugate Gradient algorithm to solve linear equation Ax=b
+    //     Result: The Conjugate Gradient Result, i.e. solution x to Ax=b
+    //          b: Vector b in the equation Ax=b
+    //    MaxIter: Maximum Iterations of Conjugate Gradient (in modular_rl is 10)
+    // ResidualTh: Threshold of Residual (in modular_rl is 1e-10)
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(param.LayerSize, param.NumLayers);
+    double * p = (double *) calloc(NumParams, sizeof(double));
+    double * r = (double *) calloc(NumParams, sizeof(double));
+    double * x = (double *) calloc(NumParams, sizeof(double));
+    double * z = (double *) calloc(NumParams, sizeof(double));
+
+    // Initialisation
+    double rdotr = 0;
+    for (size_t i=0; i<NumParams; ++i) {
+        p[i] = b[i];
+        r[i] = b[i];
+        rdotr += r[i] * r[i];
+    }
+    
+    // Iterative Solver
+    for (size_t iter=0; iter<=MaxIter; ++iter) {
+
+        // Calculate Frobenius Norm of x
+        double FrobNorm = 0;
+        for (size_t i=0; i<NumParams; ++i) FrobNorm += x[i] * x[i];
+        FrobNorm = sqrt(FrobNorm);
+        printf("CG Iter[%zu] Residual Norm=%e, Soln Norm=%e\n", iter, rdotr, FrobNorm);
+        
+        // Check Termination Condition
+        if (rdotr<ResidualTh || iter==MaxIter) {
+            for (size_t i=0; i<NumParams; ++i) Result[i] = x[i];
+            break;
+        }
+        
+        // Calculate z = FIM*p
+        int FVPStatus = FVPFast(param, z, p);
+        if (FVPStatus!=0) {
+            fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
+            free(p); free(r); free(x); free(z);
+            return -1;
+        }
+        
+        // Update x and r
+        double pdotz = 0;
+        for (size_t i=0; i<NumParams; ++i) pdotz += p[i] * z[i];
+        double v = rdotr / pdotz;
+        for (size_t i=0; i<NumParams; ++i) {
+            x[i] += v * p[i];
+            r[i] -= v * z[i];
+        }
+        
+        // Update p
+        double newrdotr = 0;
+        for (size_t i=0; i<NumParams; ++i) newrdotr += r[i] * r[i];
+        double mu = newrdotr / rdotr;
+        for (size_t i=0; i<NumParams; ++i) p[i] = r[i] + mu * p[i];
+        
+        // Update rdotr
+        rdotr = newrdotr;
+    }
+    
+    // Clean Up
+    free(p); free(r); free(x); free(z);
+    
+    return 0;
+}
+
+
 void SimpleTest() {
 
     // Simple Data 2-2-2
@@ -1086,11 +1161,9 @@ void SwimmerTest()
     char AcFunc [] = {'l', 't', 't', 'l'};
     size_t LayerSize [] = {8, 64, 64, 2};
 
-
     char * ModelFileName = "SwimmerTestModel.txt";
     char * DataFileName  = "SwimmerTestData.txt";
     char * FVPFileName   = "SwimmerTestFVP.txt";
-
 
     TRPOparam Param;
     Param.ModelFile  = ModelFileName;
@@ -1142,6 +1215,66 @@ void SwimmerTest()
 }
 
 
+void SwimmerCGTest()
+{
+	
+    // Swimmer-v1
+    char AcFunc [] = {'l', 't', 't', 'l'};
+    size_t LayerSize [] = {8, 64, 64, 2};
+
+    char * ModelFileName = "SwimmerTestModel.txt";
+    char * DataFileName  = "SwimmerTestData.txt";
+    char * CGFileName    = "SwimmerTestCG.txt";
+
+    TRPOparam Param;
+    Param.ModelFile  = ModelFileName;
+    Param.DataFile   = DataFileName;
+    Param.NumLayers  = 4;
+    Param.AcFunc     = AcFunc;
+    Param.LayerSize  = LayerSize;
+    Param.NumSamples = 26000;
+    Param.CG_Damping = 0;
+
+    // Open Simulation Data File that contains test data
+    FILE *DataFilePointer = fopen(CGFileName, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", CGFileName);
+        return;
+    }
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double * input   = (double *) calloc(NumParams, sizeof(double));
+    double * result  = (double *) calloc(NumParams, sizeof(double));
+    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
+    
+    // Read Input and Expect
+    for (size_t i=0; i<NumParams; ++i) {
+         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
+    }
+    fclose(DataFilePointer);
+    
+    printf("-------------------------- Swimmer CG Test ---------------------------\n");
+    int CGStatus = CG(Param, result, input, 10, 1e-10);
+    if (CGStatus!=0) fprintf(stderr, "[ERROR] Conjugate Gradient Calculation Failed.\n");
+    
+    // Check Result
+    double percentage_err = 0;
+    for (size_t i=0; i<NumParams; ++i) {        
+        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
+    	if (expect[i] != 0) percentage_err += cur_err;
+    	if (cur_err>0.1) printf("CG[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
+    }
+    percentage_err = percentage_err / (double)NumParams;
+    printf("\n[INFO] Conjugate Gradient Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("---------------------------------------------------------------------\n\n");
+
+    // Clean Up    
+    free(input); free(result); free(expect);
+    
+    return;
+}
+
 
 int main()
 {
@@ -1151,6 +1284,7 @@ int main()
     SimpleTest();
     PendulumTest();
     SwimmerTest();
+    SwimmerCGTest();
 
 
     //////////////////// FPGA ////////////////////
