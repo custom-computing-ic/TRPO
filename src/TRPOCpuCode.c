@@ -780,10 +780,14 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
     
     for (size_t iter=0; iter<NumSamples; iter++) {
     
-        //////////////////// Ordinary Forward Propagation ////////////////////
+        //////////////////// Combined Forward Propagation ////////////////////
     
-        // Assign Input Values
-        for (size_t i=0; i<ObservSpaceDim; ++i) Layer[0][i] = Observ[iter*ObservSpaceDim+i];
+        // Initialise the Input Layer
+        for (size_t i=0; i<ObservSpaceDim; ++i) {
+              Layer[0][i] = Observ[iter*ObservSpaceDim+i];
+            RxLayer[0][i] = 0;
+            RyLayer[0][i] = 0;
+        }
     
         // Forward Propagation
         for (size_t i=0; i<NumLayers-1; ++i) {
@@ -791,29 +795,50 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
             // Propagate from Layer[i] to Layer[i+1]
             for (size_t j=0; j<LayerSize[i+1]; ++j) {
                 
-                // Calculating pre-activated value for item[j] in next layer
-                Layer[i+1][j] = B[i][j];
+                // Initialise x_j and R{x_j} in next layer
+                // Here we just use y_j's memory space to store x_j temoporarily
+                  Layer[i+1][j] =  B[i][j];
+                RxLayer[i+1][j] = VB[i][j];
+                
                 for (size_t k=0; k<LayerSize[i]; ++k) {
                     // From Neuron #k in Layer[i] to Neuron #j in Layer[i+1]
-                    Layer[i+1][j] += Layer[i][k] * W[i][k*LayerSize[i+1]+j];
+                      Layer[i+1][j] +=   Layer[i][k] *  W[i][k*LayerSize[i+1]+j];
+                    RxLayer[i+1][j] += RyLayer[i][k] *  W[i][k*LayerSize[i+1]+j];
+                    RxLayer[i+1][j] +=   Layer[i][k] * VW[i][k*LayerSize[i+1]+j];
                 }
             
-                // Apply Activation Function
+                // Calculate y_j and R{y_j} in next layer. Note that R{y_j} depends on y_j
                 switch (AcFunc[i+1]) {
                     // Linear Activation Function: Ac(x) = (x)
-                    case 'l': {break;}
+                    case 'l': {
+                        RyLayer[i+1][j] = RxLayer[i+1][j];
+                        break;
+                    }
                     // tanh() Activation Function
-                    case 't': {Layer[i+1][j] = tanh(Layer[i+1][j]); break;}
+                    case 't': {
+                          Layer[i+1][j] = tanh(Layer[i+1][j]);
+                        RyLayer[i+1][j] = RxLayer[i+1][j] * (1 - Layer[i+1][j] * Layer[i+1][j]);
+                        break;
+                    }
                     // 0.1x Activation Function
-                    case 'o': {Layer[i+1][j] = 0.1*Layer[i+1][j]; break;}
+                    case 'o': {
+                          Layer[i+1][j] = 0.1 *   Layer[i+1][j];
+                        RyLayer[i+1][j] = 0.1 * RxLayer[i+1][j];
+                        break;
+                    }
                     // sigmoid Activation Function
-                    case 's': {Layer[i+1][j] = 1.0/(1+exp(-Layer[i+1][j])); break;}
+                    case 's': {
+                          Layer[i+1][j] = 1.0 / ( 1 + exp(-Layer[i+1][j]) );
+                        RyLayer[i+1][j] = RxLayer[i+1][j] * Layer[i+1][j] * (1 - Layer[i+1][j]);
+                        break;
+                    }
                     // Default: Activation Function not supported
                     default: {
                         printf("[ERROR] AC Function for Layer[%zu] is %c. Unsupported.\n", i+1, AcFunc[i+1]);
                         return -1;
                     }
                 }
+
             }
         }
 
@@ -823,49 +848,6 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
             double expected = Mean[iter*ActionSpaceDim+i];
             double err      = abs( (output - expected) / expected ) * 100;
             if (err>0.1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
-        }
-
-        
-        //////////////////// Pearlmutter Forward Propagation ////////////////////
-
-        
-        // Input is constant, so the R{} derivative is 0
-        for (size_t i=0; i<ObservSpaceDim; ++i) {
-            RyLayer[0][i] = 0;
-            RxLayer[0][i] = 0;
-        }
-    
-        // Forward Propagation
-        for (size_t i=0; i<NumLayers-1; ++i) {
-            
-            // Propagate from Layer[i] to Layer[i+1]
-            for (size_t j=0; j<LayerSize[i+1]; ++j) {
-                
-                // Calculate R{x_j} in next layer
-                RxLayer[i+1][j] = VB[i][j];
-                for (size_t k=0; k<LayerSize[i]; ++k) {
-                    // From Neuron #k in Layer[i] to Neuron #j in Layer[i+1]
-                    RxLayer[i+1][j] += RyLayer[i][k] * W[i][k*LayerSize[i+1]+j];
-                    RxLayer[i+1][j] += Layer[i][k] * VW[i][k*LayerSize[i+1]+j];
-                }
-
-                // Calculate R{y_j} in next layer, need to differentiate Activation Function
-                switch (AcFunc[i+1]) {
-                    // Linear Activation Function: Ac(x) = (x)
-                    case 'l': {RyLayer[i+1][j] = RxLayer[i+1][j]; break;}
-                    // tanh() Activation Function: tanh' = 1 - tanh^2
-                    case 't': {RyLayer[i+1][j] = RxLayer[i+1][j] * (1- Layer[i+1][j] * Layer[i+1][j]); break;}
-                    // 0.1x Activation Function
-                    case 'o': {RyLayer[i+1][j] = 0.1 * RxLayer[i+1][j]; break;}
-                    // sigmoid Activation Function: sigmoid' = sigmoid * (1 - sigmoid)
-                    case 's': {RyLayer[i+1][j] = RxLayer[i+1][j] * Layer[i+1][j] * (1- Layer[i+1][j]); break;}
-                    // Default: Activation Function not supported
-                    default: {
-                        fprintf(stderr, "[ERROR] AC Function for Layer[%zu] is %c. Unsupported.\n", i+1, AcFunc[i+1]);
-                        return -1;
-                    }
-                }
-            }
         }
 
 
