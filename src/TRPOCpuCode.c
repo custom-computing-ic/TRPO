@@ -888,20 +888,14 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                 RGB[i-1][j] = RGLayer[i][j];
             }
 
-            // Calculate the R{} derivative w.r.t. to Weight
-            for (size_t j=0; j<LayerSize[i-1]; ++j) {
-                for (size_t k=0; k<LayerSize[i]; ++k) {
-                    // The R{} Derivative w.r.t. to the weight from Neuron #j in Layer[i-1] to Neuron #k in Layer[i]
-                    RGW[i-1][j*LayerSize[i]+k] = Layer[i-1][j] * RGLayer[i][k];
-                }
-            }
-
-            // Calculate the R{} derivative w.r.t. the output values from Layer[i]
+            // Calculate the R{} derivative w.r.t. to Weight and the output values from Layer[i]
             for (size_t j=0; j<LayerSize[i-1]; ++j) {
                 RGLayer[i-1][j] = 0;
                 for (size_t k=0; k<LayerSize[i]; ++k) {
+                    // The R{} Derivative w.r.t. to the weight from Neuron #j in Layer[i-1] to Neuron #k in Layer[i]
+                    RGW[i-1][j*LayerSize[i]+k] = Layer[i-1][j] * RGLayer[i][k];
                     // Accumulate the Gradient from Neuron #k in Layer[i] to Neuron #j in Layer[i-1]
-                    RGLayer[i-1][j] += W[i-1][j*LayerSize[i]+k] * RGLayer[i][k];
+                    RGLayer[i-1][j] += W[i-1][j*LayerSize[i]+k] * RGLayer[i][k];                    
                 }
             }
         }
