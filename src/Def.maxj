@@ -1,0 +1,44 @@
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFix.SignMode;
+import com.maxeler.maxcompiler.v2.utils.Bits;
+import java.util.List;
+import java.util.ArrayList;
+
+
+class Def {
+
+
+    ///////////////////////// TRPO Parameters /////////////////////////
+
+    // Kernel Settings
+//    public static final int DataDim             = 16;
+//    public static final int numBlocks           = 6;
+
+
+    ///////////////////////// Data Types /////////////////////////
+
+    // Fix-Point Data Type
+    public static final int FracBits = 50;
+    public static final DFEType DataType = KernelLib.dfeFixOffset(FracBits+10, -FracBits, SignMode.TWOSCOMPLEMENT);
+
+    // Input Type
+    public static final DFEType InputType = KernelLib.dfeFloat(11, 53);
+
+
+    ///////////////////////// Software Utility Functions /////////////////////////
+
+    // Float Input Data Generator
+    public static List<Bits> FloatVectorDataGenerator(double [][] data, int numTicks, int VectorWidth) {
+        final List<Bits> encodedData = new ArrayList<Bits>(numTicks);
+        for (int i=0; i<numTicks; ++i) {
+            Bits thisStepBits = InputType.encodeConstant(data[i][0]);
+            for (int j=1; j<VectorWidth; ++j){
+                thisStepBits = InputType.encodeConstant(data[i][j]).cat(thisStepBits);
+            }
+            encodedData.add(thisStepBits);
+        }
+        return encodedData;
+    }
+
+}

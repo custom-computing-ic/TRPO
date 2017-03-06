@@ -13,6 +13,9 @@
 
 # build folder
 TRPO_*
+LayerTest/
+report/
+
 
 # git unignore setting
 !SimpleTest*

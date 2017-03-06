@@ -1,0 +1,199 @@
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Accumulator;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
+import com.maxeler.maxcompiler.v2.kernelcompiler.Optimization;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+import maxpower.KernelBinaryOp.Add;
+import maxpower.TreeReduce;
+
+/**
+ * A Forward Propagation Layer
+ *
+ * @author Patrick Shao
+ *
+ * @param <ID> The ID of this Layer
+ * @param <AcFunc> Activation Function of this Layer
+ * @param <InBlockDim> Block Dimension of the Input Vector
+ * @param <NumInBlocks> Number of Input Blocks => InputDim = InBlockDim * NumInBlocks
+ * @param <OutBlockDim> Block Dimension of the Output Vector
+ * @param <NumOutBlocks> Number of Output Blocks => OutputDim = OutBlockDim * NumOutBlocks
+ * @param <PrevLayer> y values of previous layer, width should be NumInBlocks.
+ *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ * @param <PrevRyLayer> Ry values of previous layer, width should be NumInBlocks
+ *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ * @param <VW> V Weight, Grid Vector with NumOutBlocks items of DFEVector with NumInBlocks (GridVecType)
+ *                    Iterating every cycle during computation, using InBlockDim * OutBlockDim cycles to finish
+ * @param <VBias> VBias of next layer, width should be NumOutBlocks
+ *                    Iterating every InBlockDim cycles during computation, using OutBlockDim iterations to finish
+ * @param <beginFwdProp> begin forward propagation
+ *
+ */
+
+class Layer extends KernelLib{
+
+    private DFEVector<DFEVar> YVec;
+    private DFEVector<DFEVar> RyVec;
+    private DFEVar Valid;
+		
+    public DFEVector<DFEVar> getY()             {return YVec;}
+    public DFEVector<DFEVar> getRy()            {return RyVec;}
+    public DFEVar isValid()                     {return Valid;}
+	
+    Layer(  KernelLib owner,
+            int ID,
+            char AcFunc,
+            int InBlockDim,
+            int NumInBlocks,
+            int OutBlockDim,
+            int NumOutBlocks,
+            DFEVector<DFEVar> PrevLayer,
+            DFEVector<DFEVar> PrevRyLayer,
+            DFEVector<DFEVector<DFEVar>> VW,
+            DFEVector<DFEVar> VBias,
+            DFEVar beginFwdProp
+            )
+    {
+
+    super(owner);
+    
+    /////////////////////// Data Types ///////////////////////
+    
+    DFEVectorType<DFEVar>  InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
+    DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
+    DFEVectorType<DFEVector<DFEVar>> GridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
+
+
+    /////////////////////// Address Generation ///////////////////////
+
+    // Address for Weight Memory Block
+    AddrGenerator WAddrCounter = new AddrGenerator(owner, 1, InBlockDim*OutBlockDim, beginFwdProp);
+    DFEVar     WReadAddr = WAddrCounter.getAddr();
+    DFEVar isCalculating = WAddrCounter.isValid();
+
+    // Counter Reset
+    DFEVar Reset = beginFwdProp;
+
+    // XAddr - inner loop address
+    Count.Params XAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(InBlockDim))
+                                                  .withInitValue(0)
+                                                  .withMax(InBlockDim)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(Reset);
+    Counter XAddrCounter = control.count.makeCounter(XAddrCounterParam);
+    DFEVar XAddr = XAddrCounter.getCount();
+
+    // YAddr - outer loop address
+    Count.Params YAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
+                                                  .withInitValue(0)
+                                                  .withMax(OutBlockDim)
+                                                  .withEnable(XAddrCounter.getWrap())
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(Reset);
+    Counter YAddrCounter = control.count.makeCounter(YAddrCounterParam);
+    DFEVar YAddr = YAddrCounter.getCount();
+
+    // The result is valid on the last cycle of each inner loop iteration
+    Valid = isCalculating & XAddrCounter.getWrap();
+
+/*
+    // MuxSelect - for sequantial read
+    Count.Params MuxCounterParam = control.count.makeParams(MathUtils.bitsToAddress(numBlocks))
+                							.withInitValue(0)
+                							.withMax(numBlocks)
+                							.withEnable(XAddrCounter.getWrap())
+                							.withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                							.withReset(Reset);
+    Counter MuxCounter = control.count.makeCounter(MuxCounterParam);
+    DFEVar muxSelect = MuxCounter.getCount();
+*/
+
+
+    /////////////////////// Memory Allocation ///////////////////////
+    
+    // Weight Memory Blocks
+    DFEVector<DFEVector<DFEVar>> WGridVec = GridVecType.newInstance(this);
+    for (int X=0; X<NumInBlocks; ++X) {
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            Memory<DFEVar> WBlock = mem.alloc(Def.DataType, InBlockDim*OutBlockDim);
+            WBlock.mapToCPU("W"+ID+"X"+X+"Y"+Y);
+            WGridVec[Y][X] <== WBlock.read(WReadAddr);
+        }
+    }
+
+    // Bias Memory Blocks
+    DFEVector<DFEVar> Bias = OutVecType.newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        Memory<DFEVar> BBlock = mem.alloc(Def.DataType, OutBlockDim);
+        BBlock.mapToCPU("B"+ID+"Y"+Y);
+        Bias[Y] <== BBlock.read(YAddr);
+    }
+
+
+    /////////////////////// Calculation ///////////////////////
+
+    // Accumulator Parameter
+    Accumulator.Params Param = Reductions.accumulator.makeAccumulatorConfig(Def.DataType)
+                                                     .withEnable(isCalculating)
+                                                     .withClear(stream.offset(XAddr, 1)===0);
+    // Calculate Y and Ry
+    // TODO: Optimise bit width to avoid overflow
+    YVec  = OutVecType.newInstance(this);
+    RyVec = OutVecType.newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        DFEVector<DFEVar> mult_y    =   PrevLayer * WGridVec[Y];
+        DFEVector<DFEVar> mult_Ry   = PrevRyLayer * WGridVec[Y] + PrevLayer * VW[Y];
+        DFEVar toAccumulator_y  = TreeReduce.reduce(new Add<DFEVar>(), mult_y.getElementsAsList());
+        DFEVar toAccumulator_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry.getElementsAsList());
+        DFEVar sum_y  = Reductions.accumulator.makeAccumulator(toAccumulator_y,  Param);
+        DFEVar sum_Ry = Reductions.accumulator.makeAccumulator(toAccumulator_Ry, Param);
+        DFEVar prevActivated_y  = sum_y  +  Bias[Y];
+        DFEVar prevActivated_Ry = sum_Ry + VBias[Y];
+        switch (AcFunc) {
+            case 't': {
+                DFEVar Activated_y = tanh(prevActivated_y);
+                 YVec[Y] <== Activated_y;
+                RyVec[Y] <== prevActivated_Ry * (1 - Activated_y * Activated_y);
+                break;
+            }
+            case 'l': {
+                 YVec[Y] <== prevActivated_y;
+                RyVec[Y] <== prevActivated_y;
+                break;
+            }
+            default: {
+                throw new IllegalArgumentException("Layer["+ID+"]: Activation Function "+AcFunc+" unsupported.");
+			}
+        }
+    }
+    
+    // For Debug    
+    debug.simPrintf(Valid, "[%3d] X=%2d, Y=%2d, RdAddr=%2d | Y=(%.12f,%.12f,%.12f,%.12f), Ry=(%.12f,%.12f,%.12f,%.12f) Valid=%d \n", control.count.simpleCounter(32), XAddr, YAddr, WReadAddr, YVec[0], YVec[1], YVec[2], YVec[3], RyVec[0], RyVec[1], RyVec[2], RyVec[3], Valid);
+
+		
+	}
+
+    /////////////////////// Activation Functions ///////////////////////
+
+    // tanh() activation function
+    // Remarks: temporary workaround: Assign a suitable Data Type to avoid overflow
+    // TODO: final solution: use Function Approximation
+    private DFEVar tanh(DFEVar x) {
+        optimization.pushEnableBitGrowth(true);
+        DFEVar exp_2x = KernelMath.exp(2*x);
+        DFEVar result = (exp_2x - 1) / (exp_2x + 1);
+        optimization.popEnableBitGrowth();
+        return result.cast(Def.DataType);
+    }
+
+
+}
