@@ -176,7 +176,7 @@ class Layer extends KernelLib{
         }
     }
     
-    // For Debug    
+    // For Debug
     debug.simPrintf(Valid, "[%3d] X=%2d, Y=%2d, RdAddr=%2d | Y=(%.12f,%.12f,%.12f,%.12f), Ry=(%.12f,%.12f,%.12f,%.12f) Valid=%d \n", control.count.simpleCounter(32), XAddr, YAddr, WReadAddr, YVec[0], YVec[1], YVec[2], YVec[3], RyVec[0], RyVec[1], RyVec[2], RyVec[3], Valid);
 
 		

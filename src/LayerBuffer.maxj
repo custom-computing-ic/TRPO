@@ -1,0 +1,239 @@
+import java.lang.Math;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+import maxpower.ConstDenominator;
+
+/**
+ * A Forward Propagation Layer
+ *
+ * @author Patrick Shao
+ *
+ * @param <ID> The ID of this Buffer
+ * @param <InBlockDim> Block Dimension of the Input Vector
+ * @param <NumInBlocks> Number of Input Blocks => InputDim = InBlockDim * NumInBlocks
+ * @param <OutBlockDim> Block Dimension of the Output Vector
+ * @param <NumOutBlocks> Number of Output Blocks => OutputDim = OutBlockDim * NumOutBlocks
+ * @param <BufferDepth> Depth of Buffer (Number of Vectors buffered)
+ * @param <YIn> Input Y Vector during Forward Propagation
+ * @param <RyIn> Input Ry Vector during Forward Propagation
+ * @param <WriteAddrRow> Row Address of Write (which line in the buffer to write to)
+ * @param <beginWrFwdData> begin writing one line of Y and Ry for forward propagation
+ * @param <isFwdDataInValid> Are the Y and Ry input data valid on this cycle?
+ * @param <ReadAddrRow> Row Address of Read (which line in the buffer to reading from)
+ * @param <OffsetReadAddrCol> Column Address of the item to Read within each OutBlockDim
+ *
+ * Remarks: 
+ * <1> InBlockDim*NumInBlocks must be equal to OutBlockDim*NumOutBlocks
+ * <2> One of {NumInBlocks, NumOutBlocks} must be a multiple of another
+ * <3> High Level Block needs to make sure the MAXIMUM possible value of WriteAddrRow is BufferDepth - 1
+ * <4> Read and Write at the same row can be error prone
+ *
+ */
+
+class LayerBuffer extends KernelLib{
+
+    private DFEVector<DFEVar> YVec;
+    private DFEVector<DFEVar> RyVec;
+    private DFEVar RWCollision;
+
+    public DFEVector<DFEVar> getY()             {return YVec;}
+    public DFEVector<DFEVar> getRy()            {return RyVec;}
+    public DFEVar isRWCollision()               {return RWCollision;}
+
+    LayerBuffer (   KernelLib owner,
+                    int ID,
+                    int InBlockDim,
+                    int NumInBlocks,
+                    int OutBlockDim,
+                    int NumOutBlocks,
+                    int BufferDepth,
+                    DFEVector<DFEVar> YIn,
+                    DFEVector<DFEVar> RyIn,
+                    DFEVar WriteAddrRow,
+                    DFEVar beginWrFwdData,
+                    DFEVar isFwdDataInValid,
+                    DFEVar ReadAddrRow,
+                    DFEVar OffsetReadAddrCol)
+    {
+    
+    super(owner);
+    
+    /////////////////////// Argument Check ///////////////////////
+
+    // Here we assume that either NumInBlocks is a multiple of NumOutBlocks, 
+    // or NumOutBlocks is a multiple of NumInBlocks.
+    if ((Math.max(NumInBlocks,NumOutBlocks)%Math.min(NumInBlocks,NumOutBlocks))!=0) {
+        throw new IllegalArgumentException("[ERROR] One of {NumInBlocks, NumOutBlocks} must be a multiple of another.");
+    }
+    // Input and Output Dimension must match
+    if (NumInBlocks*InBlockDim != NumOutBlocks*OutBlockDim) {
+        throw new IllegalArgumentException("[ERROR] NumInBlocks*InBlockDim must be equal to NumOutBlocks*OutBlockDim.");
+    }
+
+
+    /////////////////////// Buffer ///////////////////////
+
+    if (NumInBlocks > NumOutBlocks) {
+    
+        // Input Vector is fine grained, Output Vector is coarse grained
+        
+        // Parameters
+        int NumBlocks = NumInBlocks;
+        int BlockDim = InBlockDim;
+        int BlockSize = BlockDim*BufferDepth;
+        DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
+        
+        // Write Address
+        AddrGenerator WrAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginWrFwdData, isFwdDataInValid);
+        DFEVar WriteAddrCol = WrAddrColCounter.getAddr();
+        DFEVar WriteAddr = WriteAddrRow.cast(AddrType) * BlockDim + WriteAddrCol.cast(AddrType);
+        DFEVar WriteValid = WrAddrColCounter.isValid() & isFwdDataInValid;
+        
+        // Read Address
+        int MuxWidth = NumInBlocks / NumOutBlocks;
+ 		ConstDenominator.ConstDivModResult RdAddrColDivMod = ConstDenominator.divMod(OffsetReadAddrCol, BlockDim);
+ 		DFEVar   BaseRdAddrCol = RdAddrColDivMod.getQuotient().cast(dfeUInt(MathUtils.bitsToAddress(MuxWidth)));
+ 		DFEVar OffsetRdAddrCol = RdAddrColDivMod.getRemainder().cast(AddrType);
+ 		DFEVar ReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + OffsetRdAddrCol;
+ 		RWCollision = (ReadAddr === WriteAddr) & WriteValid;
+
+        // Memory Block
+        DFEVectorType<DFEVar> ReadVecType = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks);
+        DFEVector<DFEVar> YReadVec = ReadVecType.newInstance(this);
+        DFEVector<DFEVar> RyReadVec = ReadVecType.newInstance(this);
+        for (int i=0; i<NumBlocks; ++i) {
+            // Y
+            Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
+            YBlock.port(WriteAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+            YReadVec[i] <== YBlock.read(ReadAddr);
+            // Ry
+            Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
+            RyBlock.port(WriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+            RyReadVec[i] <== RyBlock.read(ReadAddr);
+        }
+        
+        // Output Vector
+        DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
+         YVec = OutVecType.newInstance(this);
+        RyVec = OutVecType.newInstance(this);
+        for (int i=0; i<NumOutBlocks; ++i) {
+            List<DFEVar>  YReadtoMux = new ArrayList<DFEVar>(MuxWidth);
+            List<DFEVar> RyReadtoMux = new ArrayList<DFEVar>(MuxWidth);
+            List<DFEVar>    YIntoMux = new ArrayList<DFEVar>(MuxWidth);
+            List<DFEVar>   RyIntoMux = new ArrayList<DFEVar>(MuxWidth);            
+            for (int j=0; j<MuxWidth; ++j) {
+                 YReadtoMux.add(YReadVec[i*MuxWidth+j]);
+                RyReadtoMux.add(RyReadVec[i*MuxWidth+j]);
+                   YIntoMux.add(YIn[i*MuxWidth+j]);
+                  RyIntoMux.add(RyIn[i*MuxWidth+j]);
+            }
+            DFEVar  YfromBRAM = control.mux(BaseRdAddrCol, YReadtoMux);
+            DFEVar  YfromIn   = control.mux(BaseRdAddrCol, YIntoMux);
+            DFEVar RyfromBRAM = control.mux(BaseRdAddrCol, RyReadtoMux);
+            DFEVar RyfromIn   = control.mux(BaseRdAddrCol, RyIntoMux);            
+             YVec[i] <== RWCollision ?  YfromIn :  YfromBRAM;
+            RyVec[i] <== RWCollision ? RyfromIn : RyfromBRAM;
+        }
+        
+//        debug.simPrintf("[%3d] Row[%d][%d] <= [%f,%f,%f,%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, WriteAddrCol, YIn[0], YIn[1], YIn[2], YIn[3], YIn[4], YIn[5], WriteValid, ReadAddrRow, OffsetReadAddrCol, YVec[0], YVec[1], YVec[2], RWCollision);
+
+    }
+    else if (NumInBlocks < NumOutBlocks) {
+
+        // Output Vector is fine grained, Input Vector is coarse grained
+        // NOTE: In that case the high level block must make sure new data is available
+        
+        // Parameters
+        int NumBlocks = NumOutBlocks;
+        int BlockDim = OutBlockDim;
+        int BlockSize = BlockDim*BufferDepth;
+        int NumBlocksPerInput = NumBlocks / NumInBlocks;
+        DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
+        
+        // Write Address
+        AddrGenerator WrAddrColCounter = new AddrGenerator(this, 1, InBlockDim, beginWrFwdData, isFwdDataInValid);
+        DFEVar WriteAddrCol = WrAddrColCounter.getAddr();
+        DFEVar WriteDataValid = WrAddrColCounter.isValid() & isFwdDataInValid;
+        ConstDenominator.ConstDivModResult WrAddrColDivMod = ConstDenominator.divMod(WriteAddrCol, BlockDim);
+        DFEVar   BaseWrAddrCol = WrAddrColDivMod.getQuotient();
+ 		DFEVar OffsetWrAddrCol = WrAddrColDivMod.getRemainder().cast(AddrType);
+ 		DFEVar WriteAddr = WriteAddrRow.cast(AddrType) * BlockDim + OffsetWrAddrCol;
+
+        // Read Address
+        DFEVar ReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + OffsetReadAddrCol.cast(AddrType);
+        RWCollision = (ReadAddr === WriteAddr) & WriteDataValid;
+
+        // Memory Block
+        DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
+         YVec = OutVecType.newInstance(this);
+        RyVec = OutVecType.newInstance(this);
+        for (int i=0; i<NumInBlocks; ++i) {
+            for (int j=0; j<NumBlocksPerInput; ++j) {
+                DFEVar WriteValid = WriteDataValid & (BaseWrAddrCol === j);
+                // Y
+                Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
+                YBlock.port(WriteAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+                YVec[i*NumBlocksPerInput+j] <== YBlock.read(ReadAddr);
+                // Ry
+                Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
+                RyBlock.port(WriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+                RyVec[i*NumBlocksPerInput+j] <== RyBlock.read(ReadAddr);                
+            }
+        }
+        
+//        debug.simPrintf("[%3d] Row[%d][%d] <= [%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f,%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, WriteAddrCol, YIn[0], YIn[1], YIn[2], WriteDataValid, ReadAddrRow, OffsetReadAddrCol, YVec[0], YVec[1], YVec[2], YVec[3], YVec[4], YVec[5], RWCollision);
+        
+    }
+    else {
+    
+        // Output Vector and Input Vector have the same format
+    
+        // Parameters
+        int NumBlocks = NumOutBlocks;
+        int BlockDim = OutBlockDim;
+        int BlockSize = BlockDim*BufferDepth;
+        DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
+        
+        // Write Address
+        AddrGenerator WrAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginWrFwdData, isFwdDataInValid);
+        DFEVar WriteAddrCol = WrAddrColCounter.getAddr();
+        DFEVar WriteAddr = WriteAddrRow.cast(AddrType) * BlockDim + WriteAddrCol.cast(AddrType);
+        DFEVar WriteValid = WrAddrColCounter.isValid() & isFwdDataInValid;
+
+        // Read Address
+        DFEVar ReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + OffsetReadAddrCol.cast(AddrType);
+        RWCollision = (ReadAddr === WriteAddr) & WriteValid;
+
+        // Memory Block
+        DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
+         YVec = OutVecType.newInstance(this);
+        RyVec = OutVecType.newInstance(this);        
+        for (int i=0; i<NumBlocks; ++i) {
+            // Y
+            Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
+            YBlock.port(WriteAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+            YVec[i] <== RWCollision ? YIn[i] : YBlock.read(ReadAddr);
+            // Ry
+            Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
+            RyBlock.port(WriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+            RyVec[i] <== RWCollision ? RyIn[i] : RyBlock.read(ReadAddr);
+        }
+        
+//        debug.simPrintf(WriteValid, "[%3d] Row[%d][%d] <= [%f,%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, WriteAddrCol, YIn[0], YIn[1], YIn[2], YIn[3], WriteValid, ReadAddrRow, OffsetReadAddrCol, YVec[0], YVec[1], YVec[2], YVec[3], RWCollision);
+
+    }
+
+   
+    }
+
+}
