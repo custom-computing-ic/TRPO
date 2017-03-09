@@ -1,0 +1,230 @@
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Stream.OffsetExpr;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+import maxpower.KernelBinaryOp.Add;
+import maxpower.TreeReduce;
+
+/**
+ * Middle Forward Propagation Layer
+ *
+ * @author Patrick Shao
+ *
+ * @param <ID> The ID of this Layer
+ * @param <AcFunc> Activation Function of this Layer
+ * @param <InBlockDim> Block Dimension of the Input Vector
+ * @param <NumInBlocks> Number of Input Blocks => InputDim = InBlockDim * NumInBlocks
+ * @param <OutBlockDim> Block Dimension of the Output Vector
+ * @param <NumOutBlocks> Number of Output Blocks => OutputDim = OutBlockDim * NumOutBlocks
+ * @param <InputLatency> Latency of Input Vector: A new vector comes every InputLatency cycles
+ *                       TotalNumCycles = InputLatency * InBlockDim
+ * @param <PrevLayer> y values of previous layer, width should be NumInBlocks.
+ *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ * @param <PrevRyLayer> Ry values of previous layer, width should be NumInBlocks
+ *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ * @param <VW> V Weight, Grid Vector with NumOutBlocks items of DFEVector with NumInBlocks (GridVecType)
+ *                    Iterating every cycle during computation, using InBlockDim * OutBlockDim cycles to finish
+ * @param <VBias> VBias of next layer, width should be NumOutBlocks
+ *                    Iterating every InBlockDim cycles during computation, using OutBlockDim iterations to finish
+ * @param <beginFwdProp> begin forward propagation
+ *
+ * Notes: Here we assume InputLatency > OutBlockDim > Offset
+ * 
+ */
+
+class MidLayer extends KernelLib{
+
+    private DFEVector<DFEVar> YVec;
+    private DFEVector<DFEVar> RyVec;
+    private DFEVar Valid;
+		
+    public DFEVector<DFEVar> getY()             {return YVec;}
+    public DFEVector<DFEVar> getRy()            {return RyVec;}
+    public DFEVar isValid()                     {return Valid;}
+	
+    MidLayer(   KernelLib owner,
+                int ID,
+                char AcFunc,
+                int InBlockDim,
+                int NumInBlocks,
+                int OutBlockDim,
+                int NumOutBlocks,
+                int InputLatency,
+                DFEVector<DFEVar> PrevLayer,
+                DFEVector<DFEVar> PrevRyLayer,
+                DFEVector<DFEVector<DFEVar>> VW,
+                DFEVector<DFEVar> VBias,
+                DFEVar beginFwdProp
+            )
+    {
+
+    super(owner);
+    
+    /////////////////////// Data Types ///////////////////////
+    
+    DFEVectorType<DFEVar>  InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
+    DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
+    DFEVectorType<DFEVector<DFEVar>> GridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
+    DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(InBlockDim*OutBlockDim));
+
+
+    /////////////////////// Address Generation ///////////////////////
+    
+    // TODO Handle the case when Computing Latency is bigger than OutblockDim or InputLatency
+    
+    // Top Level Control
+    AddrGenerator CompCounter = new AddrGenerator(owner, 1, InputLatency*InBlockDim, beginFwdProp);
+    DFEVar isCalculating = CompCounter.isValid();
+    Count.Params NewRowCounterParam = control.count.makeParams(16)
+                                                   .withInitValue(0)
+                                                   .withMax(InputLatency)
+                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                   .withReset(beginFwdProp);
+    Counter NewRowCounter = control.count.makeCounter(NewRowCounterParam);
+    DFEVar beginNewRow = (NewRowCounter.getCount() === 0) & isCalculating;
+
+    // Col Address in OutBlockDim domain - to be used by Weight, Bias and Temp Result
+    DFEVar ColAddrCounterReset = beginNewRow;
+    AddrGenerator ColAddrCounter = new AddrGenerator(owner, 1, OutBlockDim, ColAddrCounterReset);
+    DFEVar ColAddr = ColAddrCounter.getAddr();
+    DFEVar ColAddrValid = ColAddrCounter.isValid() & isCalculating;
+
+    // Row Address in InBlockDim domain - to be used by Weight
+    DFEVar RowAddrCounterReset = beginFwdProp;
+    DFEVar IncRowAddrNextTick = NewRowCounter.getWrap();
+    AddrGenerator RowAddrCounter = new AddrGenerator(owner, 1, InBlockDim, RowAddrCounterReset, IncRowAddrNextTick);
+    DFEVar RowAddr = RowAddrCounter.getAddr();
+    DFEVar isFirstRow = (RowAddr === 0);
+
+    // Weight Read Address
+    DFEVar WReadAddr = RowAddr.cast(AddrType) * OutBlockDim + ColAddr.cast(AddrType);
+
+    // Is Output Valid
+    Valid = (RowAddr === InBlockDim-1) & ColAddrValid;
+        
+
+    /////////////////////// Memory Allocation ///////////////////////
+    
+    // Weight Memory Blocks
+    DFEVector<DFEVector<DFEVar>> WGridVec = GridVecType.newInstance(this);
+    for (int X=0; X<NumInBlocks; ++X) {
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            Memory<DFEVar> WBlock = mem.alloc(Def.DataType, InBlockDim*OutBlockDim);
+            WBlock.mapToCPU("W"+ID+"X"+X+"Y"+Y);
+            WGridVec[Y][X] <== WBlock.read(WReadAddr);
+        }
+    }
+
+    // Bias Memory Blocks
+    DFEVector<DFEVar> Bias = OutVecType.newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        Memory<DFEVar> BBlock = mem.alloc(Def.DataType, OutBlockDim);
+        BBlock.mapToCPU("B"+ID+"Y"+Y);
+        Bias[Y] <== BBlock.read(ColAddr);
+    }
+
+
+    /////////////////////// Calculation ///////////////////////
+
+    // Calculate Pre-activated Y and Ry
+    // TODO: Optimise bit width to avoid overflow
+    DFEVector<DFEVar> Temp_y  = OutVecType.newInstance(this);
+    DFEVector<DFEVar> Temp_Ry = OutVecType.newInstance(this);
+    DFEVector<DFEVar> NewPreAc_y  = OutVecType.newInstance(this);
+    DFEVector<DFEVar> NewPreAc_Ry = OutVecType.newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        DFEVector<DFEVar> mult_y  =   PrevLayer * WGridVec[Y];
+        DFEVector<DFEVar> mult_Ry = PrevRyLayer * WGridVec[Y] + PrevLayer * VW[Y];
+        DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(), mult_y.getElementsAsList());
+        DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry.getElementsAsList());
+        NewPreAc_y[Y]  <== MultAdd_y  + (isFirstRow ?  Bias[Y] : Temp_y[Y]);
+        NewPreAc_Ry[Y] <== MultAdd_Ry + (isFirstRow ? VBias[Y] : Temp_Ry[Y]);
+    }
+
+    // Prepare Write Back Data
+//    OffsetExpr Offset_y  = stream.measureDistance("MidLayer"+ID+"Offset_y",  ColAddr, NewPreAc_y[0]);
+//    OffsetExpr Offset_Ry = stream.measureDistance("MidLayer"+ID+"Offset_Ry", ColAddr, NewPreAc_Ry[0]);
+    OffsetExpr Offset_y  = stream.makeOffsetAutoLoop("MidLayer"+ID+"Offset_y");
+    OffsetExpr Offset_Ry = stream.makeOffsetAutoLoop("MidLayer"+ID+"Offset_Ry");
+     
+    DFEVector<DFEVar> TempWrData_y = OutVecType.newInstance(this);
+    DFEVector<DFEVar> TempWrData_Ry = OutVecType.newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        TempWrData_y[Y]  <== stream.offset(NewPreAc_y[Y],  -Offset_y);
+        TempWrData_Ry[Y] <== stream.offset(NewPreAc_Ry[Y], -Offset_Ry);
+    }
+    DFEVar TempWrAddr_y  = stream.offset(ColAddr, -Offset_y);
+    DFEVar TempWrAddr_Ry = stream.offset(ColAddr, -Offset_Ry);
+    DFEVar TempWrEn_y    = stream.offset(ColAddrValid, -Offset_y);
+    DFEVar TempWrEn_Ry   = stream.offset(ColAddrValid, -Offset_Ry);
+
+
+    // Temp Result of y and Ry
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        // Temp y
+        Memory<DFEVar> BRAM_y = mem.alloc(Def.DataType, OutBlockDim);
+        Temp_y[Y] <== BRAM_y.read(ColAddr);
+        BRAM_y.port(TempWrAddr_y, TempWrData_y[Y], TempWrEn_y, RamWriteMode.WRITE_FIRST);
+        // Temp Ry
+        Memory<DFEVar> BRAM_Ry = mem.alloc(Def.DataType, OutBlockDim);
+        Temp_Ry[Y] <== BRAM_Ry.read(ColAddr);
+        BRAM_Ry.port(TempWrAddr_Ry, TempWrData_Ry[Y], TempWrEn_Ry, RamWriteMode.WRITE_FIRST);
+    }
+
+
+    // Apply Activation Function
+    YVec  = OutVecType.newInstance(this);
+    RyVec = OutVecType.newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        switch (AcFunc) {
+            case 't': {
+                DFEVar Activated_y = tanh(NewPreAc_y[Y]);
+                 YVec[Y] <== Activated_y;
+                RyVec[Y] <== NewPreAc_Ry[Y] * (1 - Activated_y * Activated_y);
+                break;
+            }
+            case 'l': {
+                 YVec[Y] <== NewPreAc_y[Y];
+                RyVec[Y] <== NewPreAc_Ry[Y];
+                break;
+            }
+            default: {
+                throw new IllegalArgumentException("MidLayer["+ID+"]: Activation Function "+AcFunc+" unsupported.");
+			}
+        }
+    }
+
+
+    // For Debug
+    debug.simPrintf(ColAddrValid, "[%3d] W[%d][%d]=[%.2f, %.2f, %.2f, %.2f], IN=[%.2f, %.2f, %.2f, %.2f], Bias[%d]=%.2f, Temp[%d]=>%2.6f | PreAc_y[0]=%2.6f => y_0=%f, Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WGridVec[0][0], WGridVec[0][1], WGridVec[0][2], WGridVec[0][3], PrevLayer[0], PrevLayer[1], PrevLayer[2], PrevLayer[3], ColAddr, Bias[0], ColAddr, Temp_y[0], NewPreAc_y[0], YVec[0], Valid);
+//    debug.simPrintf(Valid, "[%3d] PreAc_y[0:3][%d] = [%.6f, %.6f, %.6f, %.6f] => y[0:3][%d] = (%.12f,%.12f,%.12f,%.12f)\n", control.count.simpleCounter(32), ColAddr, NewPreAc_y[0], NewPreAc_y[1], NewPreAc_y[2], NewPreAc_y[3], ColAddr, YVec[0], YVec[1], YVec[2], YVec[3]);
+//    debug.simPrintf(Valid, "[%3d] Y[0:3][%d]=(%.12f,%.12f,%.12f,%.12f), Ry=(%.12f,%.12f,%.12f,%.12f) | Valid=%d \n", control.count.simpleCounter(32), ColAddr, YVec[0], YVec[1], YVec[2], YVec[3], RyVec[0], RyVec[1], RyVec[2], RyVec[3], Valid);
+
+		
+	}
+
+    /////////////////////// Activation Functions ///////////////////////
+
+    // tanh() activation function
+    // Remarks: temporary workaround: Assign a suitable Data Type to avoid overflow
+    // TODO: final solution: use Function Approximation
+    private DFEVar tanh(DFEVar x) {
+        optimization.pushEnableBitGrowth(true);
+        DFEVar exp_2x = KernelMath.exp(2*x);
+        DFEVar result = (exp_2x - 1) / (exp_2x + 1);
+        optimization.popEnableBitGrowth();
+        return result.cast(Def.DataType);
+    }
+
+
+}

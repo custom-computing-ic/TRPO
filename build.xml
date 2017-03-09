@@ -83,6 +83,7 @@
 		<delete dir="${report.dir}"/>
 		<delete dir="LayerTest"/>
 		<delete dir="LayerBufferTest"/>
+		<delete dir="MidLayerTest"/>
 	</target>
 	
 </project>
