@@ -19,8 +19,8 @@ class Def {
     ///////////////////////// Data Types /////////////////////////
 
     // Fix-Point Data Type
-    public static final int FracBits = 50;
-    public static final DFEType DataType = KernelLib.dfeFixOffset(FracBits+10, -FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final int FracBits = 40;
+    public static final DFEType DataType = KernelLib.dfeFixOffset(FracBits+14, -FracBits, SignMode.TWOSCOMPLEMENT);
 
     // Input Type
     public static final DFEType InputType = KernelLib.dfeFloat(11, 53);
