@@ -66,23 +66,11 @@ public class MidLayerTest {
         // Input to Layer Block - fixed point prevLayer and prevRyLayer
         DFEVectorType<DFEVar> InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
         DFEVector<DFEVar>   PrevLayer = io.input("PrevLayer",   InVecType, beginNewRow);
-        DFEVector<DFEVar> PrevRyLayer = io.input("PrevRyLayer", InVecType, beginNewRow);        
-
-        // Input to Layer Block - VW
-        DFEVectorType<DFEVector<DFEVar>> GridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
-        DFEVector<DFEVector<DFEVar>> VW = GridVecType.newInstance(this);
-        for (int Y=0; Y<NumOutBlocks; ++Y) VW[Y] <== io.input("VW"+Y, InVecType, ColAddrValid);
-
-        // Input to Layer Block - VBias
-        DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
-        DFEVector<DFEVar> VBias = io.input("VBias", OutVecType, isComputingFstRow);
+        DFEVector<DFEVar> PrevRyLayer = io.input("PrevRyLayer", InVecType, beginNewRow);
 
         // Layer Block
         MidLayer TestMidLayer = new MidLayer(this, 1, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
-                                             InputLatency, PrevLayer, PrevRyLayer, VW, VBias, beginFwdProp);
-        DFEVector<DFEVar>  YVec = TestMidLayer.getY();
-        DFEVector<DFEVar> RyVec = TestMidLayer.getRy();
-        DFEVar isValid = TestMidLayer.isValid();
+                                             InputLatency, PrevLayer, PrevRyLayer, beginFwdProp);
 
         }
     }
@@ -103,7 +91,8 @@ public class MidLayerTest {
         mgr.setKernel(kernel);
         
         // Assign Regular Weight
-        double [] W = new double[NumWeights];
+        double []  W = new double[NumWeights];
+        double [] VW = new double[NumWeights];
 //        for (int i=0; i<NumWeights; ++i) W[i] = Math.random();
         for (int X=0; X<NumInBlocks; ++X) {
             for (int Y=0; Y<NumOutBlocks; ++Y) {
@@ -112,8 +101,10 @@ public class MidLayerTest {
                     for (int addrY=0; addrY<OutBlockDim; ++addrY) {               
 //                        double curWeight = W[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
                         double curWeight = X + 0.01 * (addrX*OutBlockDim + addrY);
-                        W[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY] = curWeight;
-                        mgr.setMappedRom("W1"+"X"+X+"Y"+Y, addr, curWeight);
+                         W[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY] = curWeight;
+                        VW[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY] = curWeight;
+                        mgr.setMappedRom("W1"+"X"+X+"Y"+Y,  addr, curWeight);
+                        mgr.setMappedRom("VW1"+"X"+X+"Y"+Y, addr, curWeight);
                         addr++;
                     }
                 }
@@ -121,12 +112,15 @@ public class MidLayerTest {
         }
 
         // Assign Regular Bias
-        double [] B = new double[OutLayerSize];
+        double []  B = new double[OutLayerSize];
+        double [] VB = new double[OutLayerSize];
 //        for (int i=0; i<OutLayerSize; ++i) B[i] = Math.random();
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             for (int addrY=0; addrY<OutBlockDim; ++addrY) {
-                B[Y*OutBlockDim + addrY] = addrY;
-                mgr.setMappedRom("B1"+"Y"+Y, addrY, B[Y*OutBlockDim + addrY]);
+                 B[Y*OutBlockDim + addrY] = addrY;
+                VB[Y*OutBlockDim + addrY] = addrY;
+                mgr.setMappedRom("B1"+"Y"+Y,  addrY,  B[Y*OutBlockDim + addrY]);
+                mgr.setMappedRom("VB1"+"Y"+Y, addrY, VB[Y*OutBlockDim + addrY]);
             }
         }
 
@@ -153,38 +147,6 @@ public class MidLayerTest {
         List<Bits> PrevRyLayer = VectorDataGenerator(PrevRyLayerData, InBlockDim, NumInBlocks);
         mgr.setInputDataRaw("PrevRyLayer", PrevRyLayer);
 
-        // Feed Random VW
-        // Note that the reading pattern here (horizontal) is different from that of input layer (vertical)
-        double [] VW = new double[NumWeights];
-        for (int i=0; i<NumWeights; ++i) VW[i] = Math.random();
-        for (int Y=0; Y<NumOutBlocks; ++Y) {
-            double [][] Data = new double[InBlockDim*OutBlockDim][NumInBlocks];
-            for (int addrX=0; addrX<InBlockDim; ++addrX){
-                for (int addrY=0; addrY<OutBlockDim; ++addrY) {
-                    int iter = addrX*OutBlockDim + addrY;
-                    for (int X=0; X<NumInBlocks; ++X) {
-                        int rowNum = X*InBlockDim + addrX;
-                        int colNum = Y*OutBlockDim + addrY;
-                        Data[iter][X] = VW[rowNum*OutLayerSize + colNum];
-                    }
-                }
-            }
-            List<Bits> VW_Y = VectorDataGenerator(Data, InBlockDim*OutBlockDim, NumInBlocks);
-            mgr.setInputDataRaw("VW"+Y, VW_Y);
-        }        
-        
-        // Feed Random VBias
-        double [] VB = new double[OutLayerSize];
-        for (int i=0; i<OutLayerSize; ++i) VB[i] = Math.random();
-        double [][] VBiasData = new double[OutBlockDim][NumOutBlocks];
-        for (int iter=0; iter<OutBlockDim; ++iter) {
-            for (int Y=0; Y<NumOutBlocks; ++Y) {
-                VBiasData[iter][Y] = VB[Y*OutBlockDim + iter];
-            }
-        }
-        List<Bits> VBias = VectorDataGenerator(VBiasData, OutBlockDim, NumOutBlocks);
-        mgr.setInputDataRaw("VBias", VBias);
-
         // Calculate Expected Output
         double [] PreAc_y  = new double[NumOutBlocks];
         double [] PreAc_Ry = new double[NumOutBlocks];        
@@ -193,7 +155,7 @@ public class MidLayerTest {
         for (int addrY=0; addrY<OutBlockDim; ++addrY) {
             for (int Y=0; Y<NumOutBlocks; ++Y) {
                 int ColNum = Y*OutBlockDim + addrY;
-                Expected_y[Y]  = B[ColNum];
+                Expected_y[Y]  =  B[ColNum];
                 Expected_Ry[Y] = VB[ColNum];
                 for (int X=0; X<NumInBlocks; ++X) {
                     for (int addrX=0; addrX<InBlockDim; ++addrX) {

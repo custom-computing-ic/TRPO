@@ -32,10 +32,6 @@ import maxpower.TreeReduce;
  *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
  * @param <PrevRyLayer> Ry values of previous layer, width should be NumInBlocks
  *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
- * @param <VW> V Weight, Grid Vector with NumOutBlocks items of DFEVector with NumInBlocks (GridVecType)
- *                    Iterating every cycle during computation, using InBlockDim * OutBlockDim cycles to finish
- * @param <VBias> VBias of next layer, width should be NumOutBlocks
- *                    Iterating every InBlockDim cycles during computation, using OutBlockDim iterations to finish
  * @param <beginFwdProp> begin forward propagation
  *
  * Notes: Here we assume InputLatency > OutBlockDim > Offset
@@ -62,8 +58,6 @@ class MidLayer extends KernelLib{
                 int InputLatency,
                 DFEVector<DFEVar> PrevLayer,
                 DFEVector<DFEVar> PrevRyLayer,
-                DFEVector<DFEVector<DFEVar>> VW,
-                DFEVector<DFEVar> VBias,
                 DFEVar beginFwdProp
             )
     {
@@ -114,23 +108,35 @@ class MidLayer extends KernelLib{
         
 
     /////////////////////// Memory Allocation ///////////////////////
-    
-    // Weight Memory Blocks
-    DFEVector<DFEVector<DFEVar>> WGridVec = GridVecType.newInstance(this);
+
+    // Weight and VWeight Memory Blocks
+    DFEVector<DFEVector<DFEVar>>  WGridVec = GridVecType.newInstance(this);
+    DFEVector<DFEVector<DFEVar>> VWGridVec = GridVecType.newInstance(this);
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
+            // W Block
             Memory<DFEVar> WBlock = mem.alloc(Def.DataType, InBlockDim*OutBlockDim);
             WBlock.mapToCPU("W"+ID+"X"+X+"Y"+Y);
             WGridVec[Y][X] <== WBlock.read(WReadAddr);
+            // VW Block
+            Memory<DFEVar> VWBlock = mem.alloc(Def.DataType, InBlockDim*OutBlockDim);
+            VWBlock.mapToCPU("VW"+ID+"X"+X+"Y"+Y);
+            VWGridVec[Y][X] <== VWBlock.read(WReadAddr);
         }
     }
 
-    // Bias Memory Blocks
-    DFEVector<DFEVar> Bias = OutVecType.newInstance(this);
+    // Bias and VBias Memory Blocks
+    DFEVector<DFEVar>  Bias = OutVecType.newInstance(this);
+    DFEVector<DFEVar> VBias = OutVecType.newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
+        // B Block
         Memory<DFEVar> BBlock = mem.alloc(Def.DataType, OutBlockDim);
         BBlock.mapToCPU("B"+ID+"Y"+Y);
         Bias[Y] <== BBlock.read(ColAddr);
+        // VB Block
+        Memory<DFEVar> VBBlock = mem.alloc(Def.DataType, OutBlockDim);
+        VBBlock.mapToCPU("VB"+ID+"Y"+Y);
+        VBias[Y] <== VBBlock.read(ColAddr);
     }
 
 
@@ -144,7 +150,7 @@ class MidLayer extends KernelLib{
     DFEVector<DFEVar> NewPreAc_Ry = OutVecType.newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         DFEVector<DFEVar> mult_y  =   PrevLayer * WGridVec[Y];
-        DFEVector<DFEVar> mult_Ry = PrevRyLayer * WGridVec[Y] + PrevLayer * VW[Y];
+        DFEVector<DFEVar> mult_Ry = PrevRyLayer * WGridVec[Y] + PrevLayer * VWGridVec[Y];
         DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(), mult_y.getElementsAsList());
         DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry.getElementsAsList());
         NewPreAc_y[Y]  <== MultAdd_y  + (isFirstRow ?  Bias[Y] : Temp_y[Y]);
@@ -152,8 +158,6 @@ class MidLayer extends KernelLib{
     }
 
     // Prepare Write Back Data
-//    OffsetExpr Offset_y  = stream.measureDistance("MidLayer"+ID+"Offset_y",  ColAddr, NewPreAc_y[0]);
-//    OffsetExpr Offset_Ry = stream.measureDistance("MidLayer"+ID+"Offset_Ry", ColAddr, NewPreAc_Ry[0]);
     OffsetExpr Offset_y  = stream.makeOffsetAutoLoop("MidLayer"+ID+"Offset_y");
     OffsetExpr Offset_Ry = stream.makeOffsetAutoLoop("MidLayer"+ID+"Offset_Ry");
      
@@ -190,7 +194,7 @@ class MidLayer extends KernelLib{
             case 't': {
                 DFEVar Activated_y = tanh(NewPreAc_y[Y]);
                  YVec[Y] <== Activated_y;
-                RyVec[Y] <== NewPreAc_Ry[Y] * (1 - Activated_y * Activated_y);
+                RyVec[Y] <== NewPreAc_Ry[Y] * (1-Activated_y) * (1+Activated_y);
                 break;
             }
             case 'l': {

@@ -11,7 +11,6 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Accumulator;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
-import com.maxeler.maxcompiler.v2.kernelcompiler.Optimization;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
 import maxpower.KernelBinaryOp.Add;
@@ -33,10 +32,6 @@ import maxpower.TreeReduce;
  *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
  * @param <PrevRyLayer> Ry values of previous layer, width should be NumInBlocks
  *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
- * @param <VW> V Weight, Grid Vector with NumOutBlocks items of DFEVector with NumInBlocks (GridVecType)
- *                    Iterating every cycle during computation, using InBlockDim * OutBlockDim cycles to finish
- * @param <VBias> VBias of next layer, width should be NumOutBlocks
- *                    Iterating every InBlockDim cycles during computation, using OutBlockDim iterations to finish
  * @param <beginFwdProp> begin forward propagation
  *
  */
@@ -167,7 +162,7 @@ class Layer extends KernelLib{
             case 't': {
                 DFEVar Activated_y = tanh(prevActivated_y);
                  YVec[Y] <== Activated_y;
-                RyVec[Y] <== prevActivated_Ry * (1 - Activated_y * Activated_y);
+                RyVec[Y] <== prevActivated_Ry * (1-Activated_y) * (1+Activated_y);
                 break;
             }
             case 'l': {
