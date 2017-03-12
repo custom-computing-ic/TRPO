@@ -42,10 +42,14 @@ class MidLayer extends KernelLib{
 
     private DFEVector<DFEVar> YVec;
     private DFEVector<DFEVar> RyVec;
+    private DFEVar InputReadOffsetAddr;
+    private DFEVar FirstItemReady;
     private DFEVar Valid;
 		
     public DFEVector<DFEVar> getY()             {return YVec;}
     public DFEVector<DFEVar> getRy()            {return RyVec;}
+    public DFEVar getInputReadOffsetAddr()      {return InputReadOffsetAddr;}
+    public DFEVar isFirstItemReady()            {return FirstItemReady;}
     public DFEVar isValid()                     {return Valid;}
 	
     MidLayer(   KernelLib owner,
@@ -102,10 +106,15 @@ class MidLayer extends KernelLib{
 
     // Weight Read Address
     DFEVar WReadAddr = RowAddr.cast(AddrType) * OutBlockDim + ColAddr.cast(AddrType);
+    
+    // Offset Read Address for the Input Vector - for previous LayerBuffer
+    InputReadOffsetAddr = RowAddr;
+
+    // The first item of the result is ready at the beginning of the last iteration
+    FirstItemReady = (RowAddr === InBlockDim-1) & beginNewRow & isCalculating;
 
     // Is Output Valid
     Valid = (RowAddr === InBlockDim-1) & ColAddrValid;
-        
 
     /////////////////////// Memory Allocation ///////////////////////
 

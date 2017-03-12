@@ -94,13 +94,10 @@ public class LayerBufferTest {
         DFEVar isFwdDataInValid = EnInput;
         DFEVar ReadAddrRow = RdYAddr;
         DFEVar OffsetReadAddrCol = RdXAddr;
+        
+        @SuppressWarnings("unused")
         LayerBuffer TestLayerBuffer = new LayerBuffer (this, 0, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
-                    BufferDepth, YIn, RyIn, WriteAddrRow, beginWrFwdData, isFwdDataInValid, ReadAddrRow, OffsetReadAddrCol);
-        DFEVector<DFEVar>  YVec = TestLayerBuffer.getY();
-        DFEVector<DFEVar> RyVec = TestLayerBuffer.getRy();
-        DFEVar isCollision = TestLayerBuffer.isRWCollision();
-        
-        
+                    BufferDepth, YIn, RyIn, WriteAddrRow, beginWrFwdData, isFwdDataInValid, ReadAddrRow, OffsetReadAddrCol); 
 
         }
     }

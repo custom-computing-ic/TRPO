@@ -1,19 +1,50 @@
-/***
-   This is a simple kernel that adds two numbers.
-*/
-
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 
 class TRPOKernel extends Kernel {
 
-    protected TRPOKernel(KernelParameters parameters) {
-        super(parameters);
+    TRPOKernel(KernelParameters parameters)
+    
+    {
+    
+    super(parameters);
 
-        DFEVar a = io.input("a", dfeInt(32));
-        DFEVar b = io.input("b", dfeInt(32));
-        io.output("output", a + b, dfeInt(32));
+    /////////////////////// Parameters ///////////////////////
+    
+    int NumLayers     = Def.NumLayers;
+    int NumSamples    = Def.NumSamples;
+    int BufferDepth   = Def.BufferDepth;
+    int  [] LayerSize = Def.LayerSize;
+    int  [] NumBlocks = Def.NumBlocks;
+    char [] AcFunc    = Def.AcFunc;
+
+    
+    /////////////////////// Fisher Vector Product ///////////////////////
+    
+    // Tick
+    DFEVar Tick = control.count.simpleCounter(32);
+    
+    // Input to Kernel - floating point
+    DFEVar EnInput = dfeUInt(1).newInstance(this);
+    DFEVectorType<DFEVar> InVecType = new DFEVectorType<DFEVar>(Def.InputType, NumBlocks[0]);
+    DFEVector<DFEVar> InVec = io.input("Input", InVecType, EnInput);
+
+    // Input to Layer Block - fixed point
+    DFEVectorType<DFEVar> ObservationVecType = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[0]);
+    DFEVector<DFEVar> Observation = ObservationVecType.newInstance(this);
+    for (int i=0; i<NumBlocks[0]; ++i) Observation[i] <== InVec[i].cast(Def.DataType);
+
+    // Fisher Vector Product Computation
+    DFEVar beginCalc = (Tick === 1);
+    FVP FVPCalc = new FVP(this, NumLayers, LayerSize, NumBlocks, AcFunc, NumSamples, BufferDepth, Observation, beginCalc);
+    EnInput <== FVPCalc.getEnInput();
+
+    // Dummy Output
+    io.output("Output", Tick, dfeUInt(32));
+
     }
 
 }

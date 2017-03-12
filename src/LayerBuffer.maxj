@@ -27,7 +27,7 @@ import maxpower.ConstDenominator;
  * @param <YIn> Input Y Vector during Forward Propagation
  * @param <RyIn> Input Ry Vector during Forward Propagation
  * @param <WriteAddrRow> Row Address of Write (which line in the buffer to write to)
- * @param <beginWrFwdData> begin writing one line of Y and Ry for forward propagation
+ * @param <beginWrFwdData> begin writing one line of Y and Ry for forward propagation - true when first value comes
  * @param <isFwdDataInValid> Are the Y and Ry input data valid on this cycle?
  * @param <ReadAddrRow> Row Address of Read (which line in the buffer to reading from)
  * @param <OffsetReadAddrCol> Column Address of the item to Read within each OutBlockDim

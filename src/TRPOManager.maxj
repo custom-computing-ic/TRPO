@@ -1,48 +1,91 @@
-/***
-  The manager for this design just streams data from CPU to DFE and back via PCI-E.
-*/
-import com.maxeler.maxcompiler.v2.managers.engine_interfaces.CPUTypes;
-import com.maxeler.maxcompiler.v2.managers.engine_interfaces.EngineInterface;
-import com.maxeler.maxcompiler.v2.managers.engine_interfaces.InterfaceParam;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelConfiguration;
 import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
 import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+import com.maxeler.maxcompiler.v2.managers.BuildConfig;
+import com.maxeler.maxcompiler.v2.managers.DFEArchitecture;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.CPUTypes;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.EngineInterface;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.EngineInterface.Direction;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.InterfaceParam;
 import com.maxeler.maxcompiler.v2.build.EngineParameters;
 
 public class TRPOManager extends CustomManager{
 
-    private static final String s_kernelName  = "TRPOKernel";
+    private static final String Name  = "TRPOKernel";
+
 
     TRPOManager(EngineParameters ep)
     {
         super(ep);
 
-        KernelBlock k = addKernel(new TRPOKernel(makeKernelParameters(s_kernelName)));
+        ///////////////////////// Configuration /////////////////////////
 
-        k.getInput("a") <== addStreamFromCPU("a");
-        k.getInput("b") <== addStreamFromCPU("b");
-        addStreamToCPU("output") <== k.getOutput("output");
+        // Hardware Configuration
+        if (ep.getDFEModel().getDFEArchitecture() == DFEArchitecture.MAX4_Maia) {
+            BuildConfig Config = new BuildConfig(BuildConfig.Level.FULL_BUILD);
+            Config.setBuildEffort(BuildConfig.Effort.HIGH);
+            Config.setOptimizationGoal(BuildConfig.OptimizationTechnique.AREA);
+            Config.setMPPRCostTableSearchRange(1, 20);
+            Config.setMPPRParallelism(8);
+            Config.setEnableTimingAnalysis(true);
+            setBuildConfig(Config);
+            config.setDefaultStreamClockFrequency(Def.KernelFrequencyMAX4);
+            config.setAllowNonMultipleTransitions(true);
+		}	
+		
+		// Simulation Configuration
+        getCurrentKernelConfig().simulation.setRAMAddressCollisionBehaviour(KernelConfiguration.SimulationOptions.SimulationBehaviour.IGNORE);
+
+
+        ///////////////////////// Kernel Configuration /////////////////////////
+
+        KernelBlock k = addKernel(new TRPOKernel(makeKernelParameters(Name)));
+        k.getInput("Input") <== addStreamFromCPU("Input");
+        addStreamToCPU("Output") <== k.getOutput("Output");
     }
 
-    private static EngineInterface interfaceDefault() {
-        EngineInterface engine_interface = new EngineInterface();
-        CPUTypes type = CPUTypes.INT32;
-        int size = type.sizeInBytes();
 
-        InterfaceParam N = engine_interface.addParam("N", CPUTypes.INT);
-        InterfaceParam sizeBytes = N * size;
+    // Initialisation Interface - Initialise Mapped Memories
+    private static EngineInterface InitTRPO() {
 
-        engine_interface.setTicks(s_kernelName, N);
+        EngineInterface ei = new EngineInterface("InitTRPO");
+        ei.setTicks(Name, 0);
+        ei.ignoreStream("Input");
+        ei.ignoreAll(Direction.OUT);
 
-        engine_interface.setStream("a", type, sizeBytes);
-        engine_interface.setStream("b", type, sizeBytes);
-        engine_interface.setStream("output", type, sizeBytes);
-        return engine_interface;
+        return ei;
+	}
+
+    // Run Interface - Run TRPO
+    private static EngineInterface RunTRPO() {
+
+        EngineInterface ei = new EngineInterface("RunTRPO");
+
+        // Number of ticks to run        
+        InterfaceParam NumTicks = ei.addParam("Ticks", CPUTypes.INT);
+        ei.setTicks(Name, NumTicks);
+
+        // Input Vector - Note that it's padded
+        int InputSize = CPUTypes.DOUBLE.sizeInBytes() * Def.LayerSize[0] * Def.NumSamples;
+        ei.setStream("Input",  CPUTypes.DOUBLE, InputSize);
+        
+        // Output Vector
+        ei.setStream("Output", CPUTypes.UINT32, CPUTypes.UINT32.sizeInBytes()*NumTicks);
+        
+        // Ignore Other Parameters (Mapped Memories)
+        ei.ignoreAll(Direction.IN_OUT);
+        
+        return ei;
     }
 
-
+    // Main Function
     public static void main(String[] args) {
+    
         TRPOManager manager = new TRPOManager(new EngineParameters(args));
-        manager.createSLiCinterface(interfaceDefault());
+        
+        manager.createSLiCinterface(InitTRPO());
+        manager.createSLiCinterface(RunTRPO());
         manager.build();
     }
+    
 }

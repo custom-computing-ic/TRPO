@@ -1,0 +1,95 @@
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+
+/**
+ * Buffering Input for the First Layer
+ *
+ * @author Patrick Shao
+ *
+ * @param <BlockDim> Block Dimension of the Input Vector
+ * @param <NumBlocks> Vector Width of Input Vector => InputDim = BlockDim * NumBlocks
+ * @param <BufferDepth> Depth of the Buffer (Number of vectors buffered)
+ * @param <DataIn> Input Vector to be stored in the buffer
+ * @param <WriteAddr> Buffer Write Address, range [0, BufferDepth-1]
+ * @param <beginWrite> Begin writing a vector to buffer 
+ * @param <ReadAddr> Buffer Read Address, range [0, BufferDepth-1]
+ * @param <beginRead> Begin reading a vector from buffer
+ *
+ * Remarks: 
+ * <1> High Level Block needs to make sure the MAXIMUM possible value of WriteAddrRow is BufferDepth - 1
+ * <2> Read and Write at the same row can be error prone
+ *
+ */
+
+class InputBuffer extends KernelLib{
+
+    private DFEVector<DFEVar> FwdData;
+    private DFEVector<DFEVar> BwdData;
+
+    public DFEVector<DFEVar> getFwdData()          {return FwdData;}
+    public DFEVector<DFEVar> getBwdData()          {return BwdData;}
+
+    InputBuffer (   KernelLib owner,
+                    int BlockDim,
+                    int NumBlocks,
+                    int BufferDepth,
+                    DFEVector<DFEVar> DataIn,
+                    DFEVar WriteAddr,
+                    DFEVar beginWrite,
+                    DFEVar ReadAddr,
+                    DFEVar beginRead)
+    {
+    
+    super(owner);
+    
+    /////////////////////// Control ///////////////////////
+    
+    DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockDim*BufferDepth));
+
+    // R/W Port: Data for Forward Propagation
+    Count.Params PortAddrColCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockDim))
+                                                  .withInitValue(0)
+                                                  .withMax(BlockDim)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(beginWrite);
+    Counter PortAddrColCounter = control.count.makeCounter(PortAddrColCounterParam);
+    DFEVar PortAddrCol = PortAddrColCounter.getCount();
+    DFEVar PortAddr = WriteAddr.cast(AddrType) * BlockDim + PortAddrCol.cast(AddrType);
+    // Write is valid only during the first iteration, then iteratively read this vector for several times.
+    AddrGenerator WriteCounter = new AddrGenerator(this, 1, BlockDim, beginWrite);
+    DFEVar WriteValid = WriteCounter.isValid();    
+
+    // Read Address
+    AddrGenerator RdAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginRead);
+    DFEVar ReadAddrCol = RdAddrColCounter.getAddr();
+    DFEVar BlockReadAddr = ReadAddr.cast(AddrType) * BlockDim + ReadAddrCol.cast(AddrType);
+
+    /////////////////////// Memory Allocation ///////////////////////
+
+    // Memory Block
+    DFEVectorType<DFEVar> VecType = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks);
+    FwdData = VecType.newInstance(this);
+    BwdData = VecType.newInstance(this);
+    for (int i=0; i<NumBlocks; ++i) {
+        Memory<DFEVar> Block = mem.alloc(Def.DataType, BlockDim*BufferDepth);
+        FwdData[i] <== Block.port(PortAddr, DataIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+        BwdData[i] <== Block.read(BlockReadAddr);
+    }
+
+        
+//    debug.simPrintf(WriteValid, "[%3d] Row[%d][%d] <= [%f,%f,%f,%f], En=%d | FwdData[%d][%d] => [%f,%f,%f,%f]\n", control.count.simpleCounter(16), PortAddr, PortAddrCol, DataIn[0], DataIn[1], DataIn[2], DataIn[3], WriteValid, PortAddr, PortAddrCol, FwdData[0], FwdData[1], FwdData[2], FwdData[3]);
+
+
+    }
+
+}

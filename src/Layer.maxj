@@ -40,10 +40,14 @@ class Layer extends KernelLib{
 
     private DFEVector<DFEVar> YVec;
     private DFEVector<DFEVar> RyVec;
+    private DFEVar InputReadOffsetAddr;
+    private DFEVar FirstItemReady;
     private DFEVar Valid;
 		
     public DFEVector<DFEVar> getY()             {return YVec;}
     public DFEVector<DFEVar> getRy()            {return RyVec;}
+    public DFEVar getInputReadOffsetAddr()      {return InputReadOffsetAddr;}
+    public DFEVar isFirstItemReady()            {return FirstItemReady;}
     public DFEVar isValid()                     {return Valid;}
 	
     Layer(  KernelLib owner,
@@ -100,9 +104,14 @@ class Layer extends KernelLib{
     // Read Address - vertical in our case
     DFEVar WReadAddr = RowAddr.cast(AddrType) * OutBlockDim + ColAddr.cast(AddrType);
 
+    // Offset Read Address for the Input Vector - for previous LayerBuffer
+    InputReadOffsetAddr = RowAddr;
+    
+    // The first item of the result is ready at the end of the first iteration
+    FirstItemReady = RowAddrCounter.getWrap() & (ColAddr === 0);
+    
     // The result is valid on the last cycle of each inner loop iteration
     Valid = isCalculating & RowAddrCounter.getWrap();
-
 
     /////////////////////// Memory Allocation ///////////////////////
     

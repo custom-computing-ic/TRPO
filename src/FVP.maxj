@@ -1,0 +1,213 @@
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+
+/**
+ * Propagation: Several layers connected together to formulate a neural network
+ *
+ * @author Patrick Shao
+ *
+ * @param <NumLayers> Number of layers in the network: [Input] --> [Hidden 1] --> [Hidden 2] --> [Output] is 4 layers.
+ * @param <LayerSize> Size of each layer in the network
+ * @param <NumBlocks> Parallelism Factor in each layer, the vector of that layer's width will be NumBlocks
+ * @param <AcFunc> Activation Function of each layer, note that AcFunc[0] is not used as Observation is given
+ * @param <NumSamples> Number of samples to process (size of the data set)
+ * @param <Observation> Input to the first layer (observation data)
+ * @param <beginFVPCalc> begin Fisher Vector Product Calculation for the data set
+ *
+ */
+
+
+class FVP extends KernelLib{
+
+    private DFEVar EnInput;
+    
+    public DFEVar getEnInput()                     {return EnInput;}
+    
+    FVP(  KernelLib owner,
+          int NumLayers,
+          int [] LayerSize,
+          int [] NumBlocks,
+          char [] AcFunc,
+          int NumSamples,
+          int BufferDepth,
+          DFEVector<DFEVar> Observation,
+          DFEVar beginFVPCalc
+          )
+    {
+
+    super(owner);
+    
+    /////////////////////// Parameters ///////////////////////
+    
+    // Argument Check - currently we assume 4 layers:
+    // e.g. [Input] --> [Hidden 1] --> [Hidden 2] --> [Output] is 4 layers.    
+    if (NumLayers!=4) {
+        throw new IllegalArgumentException("[ERROR] Currently we assume 4 layers.");
+    }
+    if ((LayerSize.length!=NumLayers)||(AcFunc.length!=NumLayers)||(NumBlocks.length!=NumLayers)) {
+        throw new IllegalArgumentException("[ERROR] Length of LayerSize, AcFunc and numBlocks must be NumLayers.");
+    }
+    
+    // Example LayerSize
+    //  Humanoid: 376 - 128 - 64 - 17
+    //       Ant: 111 -  64 - 32 -  8
+    // Example NumBlocks
+    // NumBlocks: 32 - 8 - 4 - 4
+    
+    // Calculate BlockDim
+    int [] BlockDim = new int[NumLayers];
+    for (int i=0; i<NumLayers; ++i) BlockDim[i] = LayerSize[i] / NumBlocks[i];
+
+    // Number of Cycles needed to do forward and backward propagation for one sample
+    int NumCyclesPerSample = BlockDim[0] * BlockDim[1] + 200;
+    
+    // TODO Pipelining between successive inputs
+    // Total Number of Cycles
+    int TotalNumCycles = NumCyclesPerSample * NumSamples;
+
+    
+
+    /////////////////////// High Level Control ///////////////////////
+    
+    // TODO Pipelining between successive inputs
+    
+    // Tick
+    DFEVar Tick = control.count.simpleCounter(32);
+    
+    // Total Counter
+    AddrGenerator TotalCounter = new AddrGenerator(this, 1, TotalNumCycles, beginFVPCalc);
+    DFEVar isFVPCalculating = TotalCounter.isValid();
+    
+    // Inner Loop - Counting the current sample
+    // Note: When this counter wraps, it means the data for the current sample is no longer needed.
+    //       So that its values in the buffer can be overwritten by subsequent items.
+    Count.Params InnerLoopCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumCyclesPerSample))
+                                                  .withInitValue(0)
+                                                  .withMax(NumCyclesPerSample)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(beginFVPCalc);
+    Counter InnerLoopCounter = control.count.makeCounter(InnerLoopCounterParam);
+    DFEVar InnerLoopCount = InnerLoopCounter.getCount();
+
+    // Outer Loop - Currently processing #OuterLoopCount sample
+    Count.Params OuterLoopCounterParam = control.count.makeParams(MathUtils.bitsToRepresentUnsigned(NumSamples))
+                                                  .withInitValue(1)
+                                                  .withMax(NumSamples)
+                                                  .withEnable(InnerLoopCounter.getWrap())
+                                                  .withWrapMode(WrapMode.STOP_AT_MAX)
+                                                  .withReset(beginFVPCalc);
+    Counter OuterLoopCounter = control.count.makeCounter(OuterLoopCounterParam);
+    DFEVar OuterLoopCount = OuterLoopCounter.getCount();
+    
+    // Begin Forward Propagation for a new sample
+    DFEVar beginNewSample = (InnerLoopCount === 0) & isFVPCalculating;
+
+    // Input Control signal for Observation
+    EnInput = beginNewSample;
+
+    /////////////////////// Input Buffer ///////////////////////
+
+    // Input Buffer Write Control
+    // TODO Currently we begin the forward propagation of a new item as soon as the first layer finishes
+    //      Currently we do not handle the overwriting issue
+    DFEVar beginNextSampleNextTick = InnerLoopCounter.getWrap() & isFVPCalculating;
+    Count.Params BufferWrAddrRowCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BufferDepth))
+                                                  .withInitValue(0)
+                                                  .withMax(BufferDepth)
+                                                  .withEnable(beginNextSampleNextTick)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(beginFVPCalc);
+    Counter BufferWrAddrRowCounter = control.count.makeCounter(BufferWrAddrRowCounterParam);
+    DFEVar BufferWrAddrRow = BufferWrAddrRowCounter.getCount();    
+
+    // Buffering Input
+    DFEVar InBufferWrAddrRow = BufferWrAddrRow;
+    DFEVar beginInBufferWrite = beginNewSample;
+    // TODO Need to modify InputBuffer.maxj and add control logic to support back propagation
+    DFEVar InBufferReadAddrRow = constant.var(dfeUInt(MathUtils.bitsToAddress(BufferDepth)), 2);
+    DFEVar beginInBufferRead = constant.var(dfeUInt(1), 0);
+    InputBuffer Buffer0 = new InputBuffer(this, BlockDim[0], NumBlocks[0], BufferDepth, Observation, 
+                              InBufferWrAddrRow, beginInBufferWrite, InBufferReadAddrRow, beginInBufferRead);
+    DFEVector<DFEVar>  y_0 = Buffer0.getFwdData(); 
+    DFEVector<DFEVar> Ry_0 = constant.vect(BlockDim[0], 0);
+
+
+    /////////////////////// First Layer ///////////////////////
+
+    // First Layer: Layer[0] => Layer[1]
+    DFEVar beginFwdProp_0 = beginNewSample;
+    Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], y_0, Ry_0, beginFwdProp_0);
+    DFEVector<DFEVar>  y_1_toBuffer = FstLayer.getY();
+    DFEVector<DFEVar> Ry_1_toBuffer = FstLayer.getRy();
+    DFEVar FstLayerOutputValid      = FstLayer.isValid();
+    DFEVar FstLayerFirstResultReady = FstLayer.isFirstItemReady();
+    
+    // Layer Buffer: Buffering y_1 and Ry_1
+    DFEVar Buffer1WriteAddrRow     = BufferWrAddrRow;
+    DFEVar Buffer1beginWrFwdData   = FstLayerFirstResultReady;
+    DFEVar Buffer1isFwdDataInValid = FstLayerOutputValid;
+    DFEVar Buffer1ReadAddrRow      = Reductions.streamHold(Buffer1WriteAddrRow, Buffer1beginWrFwdData);
+    DFEVar Buffer1ReadAddrCol      = dfeUInt(MathUtils.bitsToAddress(BlockDim[1])).newInstance(this);
+    LayerBuffer Buffer1 = new LayerBuffer(this, 1, BlockDim[1], NumBlocks[1], BlockDim[1], NumBlocks[1], BufferDepth, 
+                                          y_1_toBuffer, Ry_1_toBuffer, Buffer1WriteAddrRow, Buffer1beginWrFwdData, 
+                                          Buffer1isFwdDataInValid, Buffer1ReadAddrRow, Buffer1ReadAddrCol);
+    DFEVector<DFEVar>  y_1 = Buffer1.getY();
+    DFEVector<DFEVar> Ry_1 = Buffer1.getRy();
+    
+    
+    /////////////////////// Second Layer ///////////////////////
+    
+    // Input Layer calculates a new vector every BlockDim[0] cycles, which is the InputLatency for MidLayer.
+    // TODO BlockDim[0] may be smaller than OutBlockDim of the MidLayer. So before the MidLayer finishes, 
+    //      FstLayer may have already moved to the next input, resulting in a RowAddr mismatch
+    //      Ideally, there should be min(OutBlockDim, CompLatency) of MidLayer >= InBlockDim of FstLayer
+    //      If RowAddr mismatch happens, consider Buffer1ReadAddrRow = Reductions.streamHold(Buffer1WriteAddrRow, Buffer1beginWrFwdData);
+    //      However this only works when MidLayer finishes current sample before InLayer outputs the first result of next item
+    
+    // Second Layer: Layer[1] => Layer[2]
+    int MidLayerInputLatency = BlockDim[0];
+    DFEVar beginFwdProp_1 = FstLayerFirstResultReady;
+    MidLayer SndLayer = new MidLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2],
+                                             MidLayerInputLatency, y_1, Ry_1, beginFwdProp_1);
+    DFEVector<DFEVar>  y_2_toBuffer = SndLayer.getY();
+    DFEVector<DFEVar> Ry_2_toBuffer = SndLayer.getRy();
+    DFEVar SndLayerOutputValid      = SndLayer.isValid();
+    DFEVar SndLayerFirstResultReady = SndLayer.isFirstItemReady();
+    Buffer1ReadAddrCol <== SndLayer.getInputReadOffsetAddr();
+    
+    // Layer Buffer: Buffering y_2 and Ry_2
+    DFEVar Buffer2WriteAddrRow     = Buffer1ReadAddrRow;
+    DFEVar Buffer2beginWrFwdData   = SndLayerFirstResultReady;
+    DFEVar Buffer2isFwdDataInValid = SndLayerOutputValid;
+    DFEVar Buffer2ReadAddrRow      = Reductions.streamHold(Buffer2WriteAddrRow, Buffer2beginWrFwdData);
+    DFEVar Buffer2ReadAddrCol      = dfeUInt(MathUtils.bitsToAddress(BlockDim[2])).newInstance(this);
+    LayerBuffer Buffer2 = new LayerBuffer(this, 2, BlockDim[2], NumBlocks[2], BlockDim[2], NumBlocks[2], BufferDepth, 
+                                          y_2_toBuffer, Ry_2_toBuffer, Buffer2WriteAddrRow, Buffer2beginWrFwdData, 
+                                          Buffer2isFwdDataInValid, Buffer2ReadAddrRow, Buffer2ReadAddrCol);
+    DFEVector<DFEVar>  y_2 = Buffer2.getY();
+    DFEVector<DFEVar> Ry_2 = Buffer2.getRy();    
+    
+
+    /////////////////////// Third Layer ///////////////////////
+
+    // Third Layer: Layer[2] => Layer[3]
+    DFEVar beginFwdProp_3 = SndLayerFirstResultReady;
+    Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], y_2, Ry_2, beginFwdProp_3);
+    DFEVector<DFEVar>  y_3_toBuffer = TrdLayer.getY();
+    DFEVector<DFEVar> Ry_3_toBuffer = TrdLayer.getRy();
+    DFEVar TrdLayerOutputValid      = TrdLayer.isValid();
+    DFEVar TrdLayerFirstResultReady = TrdLayer.isFirstItemReady();
+    Buffer2ReadAddrCol <== TrdLayer.getInputReadOffsetAddr();
+    
+    
+    
+    }
+}

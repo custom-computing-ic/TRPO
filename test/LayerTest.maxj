@@ -40,6 +40,7 @@ public class LayerTest {
         DFEVector<DFEVar> PrevRyLayer = io.input("PrevRyLayer", InVecType, isCalculating);        
 
         // Layer Block
+        @SuppressWarnings("unused")
         Layer TestLayer = new Layer(this, ID, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
                                     PrevLayer, PrevRyLayer, beginFwdProp);
 

@@ -12,18 +12,27 @@ class Def {
     ///////////////////////// TRPO Parameters /////////////////////////
 
     // Kernel Settings
-//    public static final int DataDim             = 16;
-//    public static final int numBlocks           = 6;
+    public static final int NumLayers     = 4;
+    public static final int NumSamples    = 4;
+    public static final int BufferDepth   = 4; 
+    public static final int  [] LayerSize = {128, 64, 32, 8};
+    public static final int  [] NumBlocks = {32, 8, 8, 4};
+    public static final char [] AcFunc    = {'l', 't', 't', 'l'};
+
+
+    ///////////////////////// FPGA Settings /////////////////////////
+        
+    public static final int KernelFrequencyMAX4 = 200;
 
 
     ///////////////////////// Data Types /////////////////////////
 
+    // Input Type
+    public static final DFEType InputType = KernelLib.dfeFloat(11, 53);
+
     // Fix-Point Data Type
     public static final int FracBits = 40;
     public static final DFEType DataType = KernelLib.dfeFixOffset(FracBits+14, -FracBits, SignMode.TWOSCOMPLEMENT);
-
-    // Input Type
-    public static final DFEType InputType = KernelLib.dfeFloat(11, 53);
 
 
     ///////////////////////// Software Utility Functions /////////////////////////

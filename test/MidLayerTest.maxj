@@ -13,7 +13,6 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelConfiguration;
-import com.maxeler.maxcompiler.v2.utils.MathUtils;
 import com.maxeler.maxcompiler.v2.utils.Bits;
 
 public class MidLayerTest {
@@ -50,16 +49,6 @@ public class MidLayerTest {
         Counter NewRowCounter = control.count.makeCounter(NewRowCounterParam);
         DFEVar beginNewRow = (NewRowCounter.getCount() === 0) & isCalculating;
         
-        // Col Address in OutBlockDim domain - to be used by Weight, Bias and Temp Result
-        DFEVar ColAddrCounterReset = beginNewRow;
-        AddrGenerator ColAddrCounter = new AddrGenerator(this, 1, OutBlockDim, ColAddrCounterReset);
-        DFEVar ColAddr = ColAddrCounter.getAddr();
-        DFEVar ColAddrValid = ColAddrCounter.isValid() & isCalculating;        
-
-        // is computing the first row
-        AddrGenerator FstRowCounter = new AddrGenerator(this, 1, OutBlockDim, beginFwdProp);
-        DFEVar isComputingFstRow = FstRowCounter.isValid();
-        
 
         /////////////////////// Input ///////////////////////        
         
@@ -69,6 +58,7 @@ public class MidLayerTest {
         DFEVector<DFEVar> PrevRyLayer = io.input("PrevRyLayer", InVecType, beginNewRow);
 
         // Layer Block
+        @SuppressWarnings("unused")
         MidLayer TestMidLayer = new MidLayer(this, 1, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
                                              InputLatency, PrevLayer, PrevRyLayer, beginFwdProp);
 
