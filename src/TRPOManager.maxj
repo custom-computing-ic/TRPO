@@ -40,23 +40,12 @@ public class TRPOManager extends CustomManager{
         ///////////////////////// Kernel Configuration /////////////////////////
 
         KernelBlock k = addKernel(new TRPOKernel(makeKernelParameters(Name)));
-        k.getInput("Input") <== addStreamFromCPU("Input");
+        k.getInput("Observation") <== addStreamFromCPU("Observation");
+        k.getInput("BiasStd")     <== addStreamFromCPU("BiasStd");
         addStreamToCPU("Output") <== k.getOutput("Output");
     }
 
 
-    // Initialisation Interface - Initialise Mapped Memories
-    private static EngineInterface InitTRPO() {
-
-        EngineInterface ei = new EngineInterface("InitTRPO");
-        ei.setTicks(Name, 0);
-        ei.ignoreStream("Input");
-        ei.ignoreAll(Direction.OUT);
-
-        return ei;
-	}
-
-    // Run Interface - Run TRPO
     private static EngineInterface RunTRPO() {
 
         EngineInterface ei = new EngineInterface("RunTRPO");
@@ -64,16 +53,42 @@ public class TRPOManager extends CustomManager{
         // Number of ticks to run        
         InterfaceParam NumTicks = ei.addParam("Ticks", CPUTypes.INT);
         ei.setTicks(Name, NumTicks);
+ 
+        
+        ///////////////////////// Observation /////////////////////////
+        
+        // Parameters
+        int NumLayers     = Def.NumLayers;
+        int  [] LayerSize = Def.LayerSize;
+        int  [] NumBlocks = Def.NumBlocks;
 
-        // Input Vector - Note that it's padded
-        int InputSize = CPUTypes.DOUBLE.sizeInBytes() * Def.LayerSize[0] * Def.NumSamples;
-        ei.setStream("Input",  CPUTypes.DOUBLE, InputSize);
+        // Length of Weight and VWeight Initialisation Vector
+        int WeightInitVecLength = 0;
+        for (int i=0; i<NumLayers-1; ++i) {
+            WeightInitVecLength += 2*LayerSize[i]*LayerSize[i+1] / NumBlocks[i];
+        }
         
-        // Output Vector
-        ei.setStream("Output", CPUTypes.UINT32, CPUTypes.UINT32.sizeInBytes()*NumTicks);
+        // Length of Observation Vector - Note that it's padded
+        int ObservVecLength = WeightInitVecLength + Def.NumSamples;
+        int ObservVecSize   = CPUTypes.DOUBLE.sizeInBytes() * Def.LayerSize[0] * ObservVecLength;
+        ei.setStream("Observation", CPUTypes.DOUBLE, ObservVecSize);
+
+
+        ///////////////////////// BiasStd /////////////////////////
         
-        // Ignore Other Parameters (Mapped Memories)
-        ei.ignoreAll(Direction.IN_OUT);
+        // Length of Bias, VBias and Std Stream
+        int BiasStdVecLength = 0;
+        for (int i=1; i<NumLayers; ++i) {
+            BiasStdVecLength += 2*LayerSize[i];
+        }
+        
+        int BiasStdSize = CPUTypes.DOUBLE.sizeInBytes() * BiasStdVecLength;
+        ei.setStream("BiasStd", CPUTypes.DOUBLE, BiasStdSize);        
+
+
+        ///////////////////////// Output /////////////////////////
+        
+        ei.setStream("Output", CPUTypes.DOUBLE, CPUTypes.DOUBLE.sizeInBytes()*NumTicks);
         
         return ei;
     }
@@ -82,8 +97,6 @@ public class TRPOManager extends CustomManager{
     public static void main(String[] args) {
     
         TRPOManager manager = new TRPOManager(new EngineParameters(args));
-        
-        manager.createSLiCinterface(InitTRPO());
         manager.createSLiCinterface(RunTRPO());
         manager.build();
     }

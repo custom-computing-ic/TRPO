@@ -4,6 +4,9 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 
+import maxpower.KernelBinaryOp.Add;
+import maxpower.TreeReduce;
+
 class TRPOKernel extends Kernel {
 
     TRPOKernel(KernelParameters parameters)
@@ -21,29 +24,63 @@ class TRPOKernel extends Kernel {
     int  [] NumBlocks = Def.NumBlocks;
     char [] AcFunc    = Def.AcFunc;
 
+    // Number of Cycles to Initialise Weight
+    int WeightInitCycles = 0;
+    for (int i=0; i<NumLayers-1; ++i) {
+        WeightInitCycles += 2*LayerSize[i]*LayerSize[i+1] / NumBlocks[i];
+    }
+
     
-    /////////////////////// Fisher Vector Product ///////////////////////
+    /////////////////////// Control ///////////////////////
     
     // Tick
     DFEVar Tick = control.count.simpleCounter(32);
+
+    // begin Initialisation
+    DFEVar beginInit = (Tick === 1);
+
+    // begin FVP Calculation
+    DFEVar beginFVPCalc = (Tick === WeightInitCycles + 10);
     
-    // Input to Kernel - floating point
-    DFEVar EnInput = dfeUInt(1).newInstance(this);
+
+    /////////////////////// Input ///////////////////////
+    
+    // Observation Input to Kernel - floating point
+    DFEVar EnObservationInput = dfeUInt(1).newInstance(this);
     DFEVectorType<DFEVar> InVecType = new DFEVectorType<DFEVar>(Def.InputType, NumBlocks[0]);
-    DFEVector<DFEVar> InVec = io.input("Input", InVecType, EnInput);
+    DFEVector<DFEVar> InVec = io.input("Observation", InVecType, EnObservationInput);
 
-    // Input to Layer Block - fixed point
-    DFEVectorType<DFEVar> ObservationVecType = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[0]);
-    DFEVector<DFEVar> Observation = ObservationVecType.newInstance(this);
-    for (int i=0; i<NumBlocks[0]; ++i) Observation[i] <== InVec[i].cast(Def.DataType);
+    // Bias and Std Input to Kernel - floating point
+    DFEVar EnBiasStdInput = dfeUInt(1).newInstance(this);
+    DFEVar InBiasStd = io.input("BiasStd", Def.InputType, EnBiasStdInput);
 
-    // Fisher Vector Product Computation
-    DFEVar beginCalc = (Tick === 1);
-    FVP FVPCalc = new FVP(this, NumLayers, LayerSize, NumBlocks, AcFunc, NumSamples, BufferDepth, Observation, beginCalc);
-    EnInput <== FVPCalc.getEnInput();
 
+    /////////////////////// Fisher Vector Product Computation ///////////////////////
+
+    // Convert Observation to Fix Point
+    DFEVector<DFEVar> Observation = InVec.cast(new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[0]));
+
+    // Convert Bias and Std to Fix Point
+    DFEVar BiasStdInitData = InBiasStd.cast(Def.DataType);
+
+    // Fisher Vector Product
+    FVP FVPCalc = new FVP(this, NumLayers, LayerSize, NumBlocks, AcFunc, NumSamples, BufferDepth, 
+                                Observation, BiasStdInitData, beginInit, beginFVPCalc);
+    EnObservationInput <== FVPCalc.getEnObservationInput();
+    EnBiasStdInput     <== FVPCalc.getEnBiasStdInput();
+
+    // Forward Propagation Result
+    DFEVector<DFEVar> Mean = FVPCalc.getMean();
+    DFEVector<DFEVar> Ry   = FVPCalc.getRy();
+
+
+    /////////////////////// Dummy Output ///////////////////////
+    
     // Dummy Output
-    io.output("Output", Tick, dfeUInt(32));
+    DFEVar MeanSum = TreeReduce.reduce(new Add<DFEVar>(), Mean.getElementsAsList());
+    DFEVar   RySum = TreeReduce.reduce(new Add<DFEVar>(), Ry.getElementsAsList());
+    DFEVar DummyOutput = (MeanSum + RySum).cast(Def.InputType);
+    io.output("Output", DummyOutput, Def.InputType);
 
     }
 

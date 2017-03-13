@@ -8,23 +8,39 @@
 
 
 typedef struct {
+
+    //////////////////// For CPU and FPGA ////////////////////
+
     // Model Parameter File Name - weight, bias, std.
     char * ModelFile;
+    
     // Simulation Data File Name - probability and observation
     char * DataFile;
+    
     // Number of Layers in the network: [Input] --> [Hidden 1] --> [Hidden 2] --> [Output] is 4 layers.
     size_t NumLayers;
+    
     // Activation Function of each layer: 't' = tanh, 'l' = linear (y=x), 's' = sigmoid
     // Activation Function used in the Final Layer in modular_rl: 'o' y = 0.1x
     char * AcFunc;
+    
     // Number of nodes in each layer: from [Input] to [Output]
     // InvertedPendulum-v1: 4, 64, 64, 1
     // Humanoid-v1: 376, 64, 64, 17    
     size_t * LayerSize;
+    
     // Number of Samples
     size_t NumSamples;
+    
     // Conjugate Gradient Damping Factor 
     double CG_Damping;
+    
+    //////////////////// For FPGA Only ////////////////////
+    
+    // Number of Blocks for Each Layer, i.e. Parallelism Factor
+    size_t * NumBlocks;
+    
+    
     
 } TRPOparam;
 
@@ -579,9 +595,8 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
     // Result: the Fisher-Vector Product
     // Remarks: The length of Input and Result must be the number of all trainable parameters in the network
 
-    // Step1: ordinary forward propagation
-    // Step2: Pearlmutter forward propagation
-    // Step3: Pearlmutter backward propagation
+    // Step1: Combined forward propagation
+    // Step2: Pearlmutter backward propagation
 
 
     //////////////////// Read Parameters ////////////////////
@@ -1023,6 +1038,309 @@ int CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double Residu
 }
 
 
+int FVP_DFE (TRPOparam param, double *Result, double *Input)
+{
+
+    //////////////////// Remarks ////////////////////
+
+    // This function computes the Fisher-Vector Product using Pearlmutter Algorithm
+    // This version is customised to the case that KL is used as loss function
+    // Input: the vector to be multiplied with the Fisher Information Matrix
+    // Result: the Fisher-Vector Product
+    // Remarks: The length of Input and Result must be the number of all trainable parameters in the network
+
+    // Step1: Combined forward propagation
+    // Step3: Pearlmutter backward propagation
+
+
+    //////////////////// Read Parameters ////////////////////
+
+    // Assign Parameters
+    const size_t NumLayers  = param.NumLayers;
+    size_t * LayerSize      = param.LayerSize;
+    const size_t NumSamples = param.NumSamples;
+    char * ModelFile        = param.ModelFile;
+    char * DataFile         = param.DataFile;
+    const double CG_Damping = param.CG_Damping;
+    size_t * NumBlocks      = param.NumBlocks;
+
+    // Dimension of Observation Space
+    const size_t ObservSpaceDim = LayerSize[0];
+    // Dimension of Action Space
+    const size_t ActionSpaceDim = LayerSize[NumLayers-1];
+
+    // iterator when traversing through input vector and result vector
+    size_t pos;
+
+
+    //////////////////// Memory Allocation - Neural Network ////////////////////
+    
+    // W[i]: Weight Matrix from Layer[i] to Layer[i+1]
+    // B[i]: Bias Vector from Layer[i] to Layer[i+1]
+    // Item (j,k) in W[i] refers to the weight from Neuron #j in Layer[i] to Neuron #k in Layer[i+1]
+    // Item B[k] is the bias of Neuron #k in Layer[i+1]
+    double * W [NumLayers-1];
+    double * B [NumLayers-1];
+    for (size_t i=0; i<NumLayers-1; ++i) {
+        W[i] = (double *) calloc(LayerSize[i]*LayerSize[i+1], sizeof(double));
+        B[i] = (double *) calloc(LayerSize[i+1], sizeof(double));
+    }
+
+
+    //////////////////// Memory Allocation - Input Vector ////////////////////
+
+    // The Input Vector is to be multiplied with the Hessian Matrix of KL to derive the Fisher Vector Product
+    // There is one-to-one correspondence between the input vector and all trainable parameters in the neural network
+    // As a result, the shape of the Input Vector is the same as that of the parameters in the model
+    // The only difference is that the Input Vector is stored in a flattened manner
+    // There is one-to-one correspondence between: VW[i] and W[i], VB[i] and B[i], VStd[i] and Std[i]
+    double * VW [NumLayers-1];
+    double * VB [NumLayers-1];
+    for (size_t i=0; i<NumLayers-1; ++i) {
+        VW[i] = (double *) calloc(LayerSize[i]*LayerSize[i+1], sizeof(double));
+        VB[i] = (double *) calloc(LayerSize[i+1], sizeof(double));
+    }
+    
+    // Allocate Memory for Input Vector corresponding to LogStd
+    double * VLogStd = (double *) calloc(ActionSpaceDim, sizeof(double));
+
+
+    //////////////////// Memory Allocation - Simulation Data ////////////////////
+
+    // Allocate Memory for Observation and Probability Mean
+    // Observ: list of observations - corresponds to ob_no in modular_rl
+    // Mean: list of probablity mean values - corresponds to the 'mean' part of prob_np in modular_rl
+    // Remarks: due to the specific setting of the experienments in the TRPO paper,
+    //          Std is the same for all samples in each simulation iteration,
+    //          so we just allocate Std memory space for one sample and use it for all samples.
+    //          The general case should be another vector of Std with size NumSamples*ActionSpaceDim
+    double * Observ = (double *) calloc(NumSamples*ObservSpaceDim, sizeof(double));
+    double * Mean   = (double *) calloc(NumSamples*ActionSpaceDim, sizeof(double));
+    double * Std    = (double *) calloc(ActionSpaceDim, sizeof(double));
+    
+    
+    //////////////////// Load Neural Network ////////////////////
+    
+    // Open Model File that contains Weights, Bias and std
+    FILE *ModelFilePointer = fopen(ModelFile, "r");
+    if (ModelFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Model File [%s]. \n", ModelFile);
+        return -1;
+    }
+    
+    // Read Weights and Bias from file
+    for (size_t i=0; i<NumLayers-1; ++i) {
+        // Reading Weights W[i]: from Layer[i] to Layer[i+1]
+        size_t curLayerDim  = LayerSize[i];
+        size_t nextLayerDim = LayerSize[i+1];
+        for (size_t j=0; j<curLayerDim;++j) {
+            for (size_t k=0; k<nextLayerDim; ++k) {
+                fscanf(ModelFilePointer, "%lf", &W[i][j*nextLayerDim+k]);
+            }
+        }
+        // Reading Bias B[i]: from Layer[i] to Layer[i+1]
+        for (size_t k=0; k<nextLayerDim; ++k) {
+            fscanf(ModelFilePointer, "%lf", &B[i][k]);
+        }
+    }
+
+    // Read LogStd from file
+    // Remarks: actually this LogStd will be overwritten by the Std from the datafile
+    for (size_t k=0; k<ActionSpaceDim; ++k) {
+        fscanf(ModelFilePointer, "%lf", &Std[k]);
+    }
+
+    // Close Model File
+    fclose(ModelFilePointer);
+    
+    
+    //////////////////// Load Input Vector and Init Result Vector ////////////////////
+    
+    pos = 0;
+    for (size_t i=0; i<NumLayers-1; ++i) {
+        size_t curLayerDim  = LayerSize[i];
+        size_t nextLayerDim = LayerSize[i+1];
+        for (size_t j=0; j<curLayerDim;++j) {
+            for (size_t k=0; k<nextLayerDim; ++k) {
+                VW[i][j*nextLayerDim+k] = Input[pos];
+                pos++;
+            }
+        }
+        for (size_t k=0; k<nextLayerDim; ++k) {
+            VB[i][k] = Input[pos];
+            pos++;
+        }
+    }
+    for (size_t k=0; k<ActionSpaceDim; ++k) {
+        VLogStd[k] = Input[pos];
+        pos++;
+    }
+    
+    
+    //////////////////// Load Simulation Data ////////////////////
+    
+    // Open Data File that contains Mean, std and Observation
+    FILE *DataFilePointer = fopen(DataFile, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", DataFile);
+        return -1;
+    }
+    
+    // Read Mean, Std and Observation
+    // Remarks: Std is the same for all samples, and appears in every line in the data file
+    //          so we are writing the same Std again and again to the same place.
+    for (size_t i=0; i<NumSamples; ++i) {
+        // Read Mean
+        for (size_t j=0; j<ActionSpaceDim; ++j) {
+            fscanf(DataFilePointer, "%lf", &Mean[i*ActionSpaceDim+j]);
+        }
+        // Read Std
+        for (size_t j=0; j<ActionSpaceDim; ++j) {
+            fscanf(DataFilePointer, "%lf", &Std[j]);
+        }
+        // Read Observation
+        for (size_t j=0; j<ObservSpaceDim; ++j) {
+            fscanf(DataFilePointer, "%lf", &Observ[i*ObservSpaceDim+j]);
+        }
+    }
+    
+    // Close Data File
+    fclose(DataFilePointer);
+    
+    
+    //////////////////// FPGA - Initialisation ////////////////////
+
+	// Load Maxfile and Engine
+	fprintf(stderr, "[INFO] Initialising FPGA...");
+	max_file_t*  maxfile = TRPO_init();
+	max_engine_t* engine = max_load(maxfile, "*");
+
+    // Calculate BlockDim
+    size_t * BlockDim = (size_t *) calloc(NumLayers, sizeof(size_t));
+    for (int i=0; i<NumLayers; ++i) BlockDim[i] = LayerSize[i] / NumBlocks[i];
+
+    // Length of Weight and VWeight Initialisation Vector
+    int WeightInitVecLength = 0;
+    for (size_t i=0; i<NumLayers-1; ++i) {
+        WeightInitVecLength += 2 * LayerSize[i] * LayerSize[i+1] / NumBlocks[i];
+    }
+
+    // Length of Observation Vector
+    // TODO Stream Padding if necessary
+    size_t ObservVecLength = WeightInitVecLength + NumSamples;
+    size_t ObservVecWidth  = NumBlocks[0]; 
+    double * Observation = (double *) calloc(ObservVecLength*ObservVecWidth, sizeof(double));
+    
+    // Feed Weight and VWeight into Observation
+    size_t RowNum = 0;
+    for (size_t ID=0; ID<NumLayers-1; ++ID) {
+        // Parameters of current
+        size_t   InBlockDim = BlockDim[ID];
+        size_t  NumInBlocks = NumBlocks[ID];
+        size_t  OutBlockDim = BlockDim[ID+1];
+        size_t NumOutBlocks = NumBlocks[ID+1];
+        size_t OutLayerSize = LayerSize[ID+1];
+        // Feed Weight of Layer[ID]
+        for (size_t Y=0; Y<NumOutBlocks; ++Y) {
+            for (size_t addrX=0; addrX<InBlockDim; ++addrX) {
+                for (size_t addrY=0; addrY<OutBlockDim; ++addrY) {
+                    for (int X=0; X<NumInBlocks; ++X) {
+                        double curW = W[ID][(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
+                        Observation[RowNum*ObservVecWidth+X] = curW;
+                    }
+                    RowNum++;
+                }
+            }
+        }
+        // Feed VWeight of Layer[ID]
+        for (size_t Y=0; Y<NumOutBlocks; ++Y) {
+            for (size_t addrX=0; addrX<InBlockDim; ++addrX) {
+                for (size_t addrY=0; addrY<OutBlockDim; ++addrY) {
+                    for (size_t X=0; X<NumInBlocks; ++X) {
+                        double curVW = VW[ID][(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
+                        Observation[RowNum*ObservVecWidth+X] = curVW;
+                    }
+                    RowNum++;
+                }
+            }
+        }
+    }
+    // Feed actual observation data into Observation
+    for (size_t iter=0; iter<NumSamples; ++iter) {
+        size_t  InBlockDim = BlockDim[0];
+        size_t NumInBlocks = NumBlocks[0];
+        for (int addrX=0; addrX<InBlockDim; ++addrX) {
+            for (int X=0; X<NumInBlocks; ++X) {
+                double curObserv = Observ[iter*ObservSpaceDim + X*InBlockDim + addrX];
+                Observation[RowNum*ObservVecWidth+X] = curObserv;
+            }
+            RowNum++;
+        }
+    }
+
+    // Length of BiasStd Vector
+    size_t BiasStdVecLength = 0;
+    for (size_t i=1; i<NumLayers; ++i) {
+        BiasStdVecLength += 2*LayerSize[i];
+    }    
+    double * BiasStd = (double *) calloc(BiasStdVecLength, sizeof(double));
+    
+    // Feed Bias and VBias into BiasStd
+    RowNum = 0;
+    for (size_t ID=0; ID<NumLayers-1; ++ID) {
+        size_t nextLayerDim = LayerSize[ID+1];
+        for (size_t k=0; k<nextLayerDim; ++k) {
+            BiasStd[RowNum] = B[ID][k];
+            RowNum++;
+        }
+        for (size_t k=0; k<nextLayerDim; ++k) {
+            BiasStd[RowNum] = VB[ID][k];
+            RowNum++;
+        }
+    }
+
+
+    //////////////////// FPGA - Run ////////////////////
+    
+    // Number of Ticks to Run
+    int NumCompCycles = BlockDim[0] * BlockDim[1] + 20;
+    int NumTicks = WeightInitVecLength + 10 + NumCompCycles * NumSamples;
+    
+    // Allocation Memory Space for Dummy Output
+    double * Output = (double *) calloc(NumTicks, sizeof(double));
+    
+    // Run DFE
+    TRPO_RunTRPO(NumTicks, BiasStd, Observation, Output);
+
+    // Free Engine and Maxfile
+    max_unload(engine);
+    TRPO_free();
+
+
+/*
+    // Averaging Fisher Vector Product over the samples and apply CG Damping
+    for (size_t i=0; i<pos; ++i) {
+        Result[i] = Result[i] / (double)NumSamples;
+        Result[i] += CG_Damping * Input[i];
+    }
+*/
+
+    //////////////////// Clean Up ////////////////////
+
+    // Free Memories Allocated for Reading Files
+    for (size_t i=0; i<NumLayers-1; ++i) {
+        free(W[i]); free(VW[i]);
+        free(B[i]); free(VB[i]);
+    }
+    free(Observ); free(Mean); free(Std); free(VLogStd);
+
+    // Free Memories Allocated for DFE
+    free(Observation); free(BiasStd); free(Output);
+
+    return 0;
+}
+
+
 void SimpleTest() {
 
     // Simple Data 2-2-2
@@ -1266,34 +1584,5 @@ int main()
     //////////////////// FPGA ////////////////////
 
 
-    const int inSize = 384;
-
-    int *a = malloc(sizeof(int) * inSize);
-    int *b = malloc(sizeof(int) * inSize);
-    int *expected = malloc(sizeof(int) * inSize);
-    int *out = malloc(sizeof(int) * inSize);
-    memset(out, 0, sizeof(int) * inSize);
-    for(int i = 0; i < inSize; ++i) {
-        a[i] = i + 1;
-        b[i] = i - 1;
-        expected[i] = 2 * i;
-    }
-
-    printf("Running on DFE.\n");
-    TRPO(inSize, a, b, out);
-
-
-  /***
-      Note that you should always test the output of your DFE
-      design against a CPU version to ensure correctness.
-  */
-
-    for (int i = 0; i < inSize; i++)
-        if (out[i] != expected[i]) {
-            printf("Output from DFE did not match CPU: %d : %d != %d\n", i, out[i], expected[i]);
-            return 1;
-        }
-
-    printf("Test passed!\n");
     return 0;
 }
