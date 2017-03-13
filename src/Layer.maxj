@@ -30,8 +30,11 @@ import maxpower.TreeReduce;
  * @param <NumOutBlocks> Number of Output Blocks => OutputDim = OutBlockDim * NumOutBlocks
  * @param <PrevLayer> y values of previous layer, width should be NumInBlocks.
  *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ *                    Note: during initialisation, PrevLayer is used to stream in W and VW.
  * @param <PrevRyLayer> Ry values of previous layer, width should be NumInBlocks
  *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ * @param <BiasInitData> Initialisation Data for Bias and VBias
+ * @param <beginInit> begin Initialisation - using PrevLayer to stream in W and VW
  * @param <beginFwdProp> begin forward propagation
  *
  */
@@ -59,6 +62,8 @@ class Layer extends KernelLib{
             int NumOutBlocks,
             DFEVector<DFEVar> PrevLayer,
             DFEVector<DFEVar> PrevRyLayer,
+            DFEVar BiasInitData,
+            DFEVar beginInit,
             DFEVar beginFwdProp
             )
     {
@@ -70,16 +75,91 @@ class Layer extends KernelLib{
     DFEVectorType<DFEVar>  InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
     DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
     DFEVectorType<DFEVector<DFEVar>> GridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
-    DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(InBlockDim*OutBlockDim));
+    int BlockSize = InBlockDim*OutBlockDim;
+    DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
 
 
-    /////////////////////// Address Generation ///////////////////////
+    /////////////////////// Address Generation - Weight Initialisation ///////////////////////
+
+    // Cycle                  0*BlockSize ~                  BlockSize - 1 for Weight X[:]Y[0]
+    // Cycle                  1*BlockSize ~                2*BlockSize - 1 for Weight X[:]Y[1]
+    // ...
+    // Cycle   (NumOutBlocks-1)*BlockSize ~     NumOutBlocks*BlockSize - 1 for Weight X[:]Y[NumOutBlocks-1]
+    
+    // Cycle       NumOutBlocks*BlockSize ~ (NumOutBlocks+1)*BlockSize - 1 for V Weight X[:]Y[0]
+    // Cycle   (NumOutBlocks+1)*BlockSize ~ (NumOutBlocks+2)*BlockSize - 1 for V Weight X[:]Y[1]
+    // ...
+    // Cycle (2*NumOutBlocks-1)*BlockSize ~ (2*NumOutBlocks)*BlockSize - 1 for V Weight X[:]Y[NumOutBlocks-1]
+    
+
+    // Reset Signal for Initialisation
+    DFEVar InitReset = beginInit;
+
+    // Top Level Control
+    AddrGenerator InitCounter = new AddrGenerator(owner, 1, 2*NumOutBlocks*BlockSize, InitReset);
+    DFEVar InitCount = InitCounter.getAddr();
+    DFEVar isInit    = InitCounter.isValid();
+    DFEVar isInitW   = isInit & (InitCount <  NumOutBlocks*BlockSize);
+    DFEVar isInitVW  = isInit & (InitCount >= NumOutBlocks*BlockSize);
+    
+    // WPortAddr - Initialisation using R/W port
+    Count.Params WPortAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockSize))
+                                                  .withInitValue(0)
+                                                  .withMax(BlockSize)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(InitReset);
+    Counter WPortAddrCounter = control.count.makeCounter(WPortAddrCounterParam);
+    DFEVar WPortAddr = WPortAddrCounter.getCount();
+
+    // YCount - to Select the block to write according to Y
+    Count.Params YCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
+                                                  .withInitValue(0)
+                                                  .withMax(NumOutBlocks)
+                                                  .withEnable(WPortAddrCounter.getWrap())
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(InitReset);
+    Counter YCounter = control.count.makeCounter(YCounterParam);
+    DFEVar YCount = YCounter.getCount();
+
+
+    /////////////////////// Address Generation - Bias Initialisation ///////////////////////
+
+    // BiasReset Signal for Initialisation
+    DFEVar BiasInitReset = beginInit;
+
+    // Top Level Control
+    AddrGenerator BiasInitCounter = new AddrGenerator(owner, 1, 2*NumOutBlocks*OutBlockDim, BiasInitReset);
+    DFEVar BiasInitCount = BiasInitCounter.getAddr();
+    DFEVar isBiasInit    = BiasInitCounter.isValid();
+    DFEVar isInitB       = isBiasInit & (BiasInitCount <  NumOutBlocks*OutBlockDim);
+    DFEVar isInitVB      = isBiasInit & (BiasInitCount >= NumOutBlocks*OutBlockDim);
+    
+    // BPortAddr - Initialisation using R/W port
+    Count.Params BPortAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
+                                                  .withInitValue(0)
+                                                  .withMax(OutBlockDim)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(BiasInitReset);
+    Counter BPortAddrCounter = control.count.makeCounter(BPortAddrCounterParam);
+    DFEVar BPortAddr = BPortAddrCounter.getCount();
+
+    // BYCount - to Select the block to write according to Y
+    Count.Params BYCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
+                                                  .withInitValue(0)
+                                                  .withMax(NumOutBlocks)
+                                                  .withEnable(BPortAddrCounter.getWrap())
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(BiasInitReset);
+    Counter BYCounter = control.count.makeCounter(BYCounterParam);
+    DFEVar BYCount = BYCounter.getCount();
+
+    /////////////////////// Address Generation - Forward Propagation ///////////////////////
 
     // Counter Reset
     DFEVar Reset = beginFwdProp;
 
     // Top Level Control
-    AddrGenerator CompCounter = new AddrGenerator(owner, 1, InBlockDim*OutBlockDim, Reset);
+    AddrGenerator CompCounter = new AddrGenerator(owner, 1, BlockSize, Reset);
     DFEVar isCalculating = CompCounter.isValid();
 
     // Row Address in InBlockDim domain - to be used by Weight
@@ -121,12 +201,12 @@ class Layer extends KernelLib{
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // W Block
-            Memory<DFEVar> WBlock = mem.alloc(Def.DataType, InBlockDim*OutBlockDim);
-            WBlock.mapToCPU("W"+ID+"X"+X+"Y"+Y);
+            Memory<DFEVar> WBlock = mem.alloc(Def.DataType, BlockSize);
+            WBlock.port(WPortAddr, PrevLayer[X], isInitW & (Y===YCount), RamWriteMode.WRITE_FIRST);
             WGridVec[Y][X] <== WBlock.read(WReadAddr);
             // VW Block
-            Memory<DFEVar> VWBlock = mem.alloc(Def.DataType, InBlockDim*OutBlockDim);
-            VWBlock.mapToCPU("VW"+ID+"X"+X+"Y"+Y);
+            Memory<DFEVar> VWBlock = mem.alloc(Def.DataType, BlockSize);
+            VWBlock.port(WPortAddr, PrevLayer[X], isInitVW & (Y===YCount), RamWriteMode.WRITE_FIRST);
             VWGridVec[Y][X] <== VWBlock.read(WReadAddr);
         }
     }
@@ -137,11 +217,11 @@ class Layer extends KernelLib{
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // B Block
         Memory<DFEVar> BBlock = mem.alloc(Def.DataType, OutBlockDim);
-        BBlock.mapToCPU("B"+ID+"Y"+Y);
+        BBlock.port(BPortAddr, BiasInitData, isInitB & (Y===BYCount), RamWriteMode.WRITE_FIRST);
         Bias[Y] <== BBlock.read(ColAddr);
         // VB Block
         Memory<DFEVar> VBBlock = mem.alloc(Def.DataType, OutBlockDim);
-        VBBlock.mapToCPU("VB"+ID+"Y"+Y);
+        VBBlock.port(BPortAddr, BiasInitData, isInitVB & (Y===BYCount), RamWriteMode.WRITE_FIRST);
         VBias[Y] <== VBBlock.read(ColAddr);
     }
 

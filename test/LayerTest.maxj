@@ -9,6 +9,7 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelConfiguration;
 import com.maxeler.maxcompiler.v2.utils.Bits;
 
 public class LayerTest {
@@ -18,7 +19,10 @@ public class LayerTest {
     private final int  NumInBlocks = 4;
     private final int  OutBlockDim = 16;
     private final int NumOutBlocks = 4;
-
+    
+    private final int WeightInitCycles = 2 * InBlockDim * OutBlockDim * NumOutBlocks;
+    private final int BiasInitCycles   = 2 * OutBlockDim * NumOutBlocks;
+    private final int FwdPropCycles    = InBlockDim * OutBlockDim;
 
     private class LayerTestKernel extends Kernel {
 
@@ -27,22 +31,41 @@ public class LayerTest {
 
         super(parameters);
 
-        // Counters
+        ///////////////////////// Control /////////////////////////
+        
         // Remarks - AddrGenerator cannot be reset at Tick 0, so postpone 1 cycle
         DFEVar Tick = control.count.simpleCounter(32);
-        DFEVar beginFwdProp = (Tick === 1);
-        AddrGenerator ComputingCounter = new AddrGenerator(this, 1, 32, beginFwdProp);
+        
+        // Initialisation
+        DFEVar beginInit = (Tick === 1);
+        
+        // Initialise Weight
+        AddrGenerator WeightInitCounter = new AddrGenerator(this, 1, WeightInitCycles, beginInit);
+        DFEVar isWeightInit = WeightInitCounter.isValid();          
+        
+        // Initialise Bias
+        AddrGenerator BiasInitCounter = new AddrGenerator(this, 1, BiasInitCycles, beginInit);
+        DFEVar isBiasInit = BiasInitCounter.isValid();        
+        
+        // Forward Propagation
+        DFEVar beginFwdProp = (Tick === WeightInitCycles + 10);
+        AddrGenerator ComputingCounter = new AddrGenerator(this, 1, FwdPropCycles, beginFwdProp);
         DFEVar isCalculating = ComputingCounter.isValid();
+
+
+        ///////////////////////// Computing /////////////////////////
 
         // Inputs
         DFEVectorType<DFEVar> InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
-        DFEVector<DFEVar>   PrevLayer = io.input("PrevLayer",   InVecType, isCalculating);
-        DFEVector<DFEVar> PrevRyLayer = io.input("PrevRyLayer", InVecType, isCalculating);        
+        DFEVector<DFEVar>     PrevLayer = io.input("PrevLayer",   InVecType, isWeightInit | isCalculating);
+        DFEVector<DFEVar>   PrevRyLayer = io.input("PrevRyLayer", InVecType, isCalculating);        
+        DFEVar             BiasInitData = io.input("BiasInitData", Def.DataType, isBiasInit);
+
 
         // Layer Block
         @SuppressWarnings("unused")
         Layer TestLayer = new Layer(this, ID, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
-                                    PrevLayer, PrevRyLayer, beginFwdProp);
+                                    PrevLayer, PrevRyLayer, BiasInitData, beginInit, beginFwdProp);
 
         }
     }
@@ -61,75 +84,115 @@ public class LayerTest {
     public void test(int ID) {
     
         // Settings
-        final int numTicks = 50;
+        final int numTicks = WeightInitCycles + FwdPropCycles + 20;
         final int  InLayerSize =  InBlockDim * NumInBlocks;
         final int OutLayerSize = OutBlockDim * NumOutBlocks;
         final int   NumWeights = InLayerSize * OutLayerSize;
         
         // Kernel
         SimulationManager  mgr = new SimulationManager("LayerTest");
+        mgr.getCurrentKernelConfig().simulation.setRAMAddressCollisionBehaviour(KernelConfiguration.SimulationOptions.SimulationBehaviour.IGNORE);
         LayerTestKernel kernel = new LayerTestKernel(mgr.makeKernelParameters(), ID);
         mgr.setKernel(kernel);
 
-        // Assign Random Weight and VWeight
+
+        ///////////////////////// Weight, VWeight, PrevLayer /////////////////////////
+
+        // Generate Random Weight and VWeight
         double []  W = new double[NumWeights];
         double [] VW = new double[NumWeights];
         for (int i=0; i<NumWeights; ++i) {
              W[i] = Math.random();
             VW[i] = Math.random();
         }
-        for (int X=0; X<NumInBlocks; ++X) {
-            for (int Y=0; Y<NumOutBlocks; ++Y) {
-                int addr = 0;
-                for (int addrX=0; addrX<InBlockDim; ++addrX) {
-                    for (int addrY=0; addrY<OutBlockDim; ++addrY) {               
-                        double curW  =  W[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
-                        double curVW = VW[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
-                        mgr.setMappedRom("W"+ID+"X"+X+"Y"+Y,  addr, curW);
-                        mgr.setMappedRom("VW"+ID+"X"+X+"Y"+Y, addr, curVW);
-                        addr++;
+        
+        // Generate Random PrevLayer
+        double [] y = new double[InLayerSize];
+        for (int i=0; i<InLayerSize; ++i) y[i] = Math.random();
+        
+        // Feed Random Weight, VWeight and PrevLayer into PrevLayerData
+        double [][] PrevLayerData = new double[WeightInitCycles+InBlockDim*OutBlockDim][NumInBlocks];
+        // Feed Weight
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            for (int addrX=0; addrX<InBlockDim; ++addrX) {
+                for (int addrY=0; addrY<OutBlockDim; ++addrY) {
+                    int iter = Y*InBlockDim*OutBlockDim + addrX*OutBlockDim + addrY;   
+                    for (int X=0; X<NumInBlocks; ++X) {
+                        double curW = W[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
+                        PrevLayerData[iter][X] = curW;
                     }
                 }
             }
         }
+        // Feed VWeight into PrevLayerData
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            for (int addrX=0; addrX<InBlockDim; ++addrX) {
+                for (int addrY=0; addrY<OutBlockDim; ++addrY) {
+                    int iter = InBlockDim*OutBlockDim*NumOutBlocks + Y*InBlockDim*OutBlockDim + addrX*OutBlockDim + addrY;   
+                    for (int X=0; X<NumInBlocks; ++X) {
+                        double curVW = VW[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
+                        PrevLayerData[iter][X] = curVW;
+                    }
+                }
+            }
+        }                
+        // Feed PrevLayer into PrevLayerData
+        for (int addrY=0; addrY<OutBlockDim; ++addrY) {
+            for (int addrX=0; addrX<InBlockDim; ++addrX) {
+                int iter = WeightInitCycles + addrY*InBlockDim + addrX;
+                for (int X=0; X<NumInBlocks; ++X) {
+                    PrevLayerData[iter][X] = y[X*InBlockDim+addrX];
+                }
+            }
+        }        
+
+        // PrevLayerData into Kernel
+        List<Bits> PrevLayer = VectorDataGenerator(PrevLayerData, WeightInitCycles+InBlockDim*OutBlockDim, NumInBlocks);   
+        mgr.setInputDataRaw("PrevLayer", PrevLayer);
         
-        // Assign Random Bias and VBias
+
+        ///////////////////////// PrevRyLayer /////////////////////////
+
+        // Generate Random PrevRyLayer
+        double [] Ry = new double[InLayerSize];
+        for (int i=0; i<InLayerSize; ++i) {
+            Ry[i] = (ID==0) ? 0 : Math.random();
+        }
+        
+        // Feed Random PrevRyLayer into PrevRyLayerData
+        double [][] PrevRyLayerData = new double[InBlockDim*OutBlockDim][NumInBlocks];
+        for (int i=0; i<OutBlockDim; ++i) {
+            for (int j=0; j<InBlockDim; ++j) {
+                int iter = i * InBlockDim + j;
+                for (int k=0; k<NumInBlocks; ++k) {
+                    PrevRyLayerData[iter][k] = Ry[k*InBlockDim+j];
+                }
+            }
+        }
+        
+        // Feed PrevRyLayerData into Kernel
+        List<Bits> PrevRyLayer = VectorDataGenerator(PrevRyLayerData, InBlockDim*OutBlockDim, NumInBlocks);
+        mgr.setInputDataRaw("PrevRyLayer", PrevRyLayer);
+        
+        
+        ///////////////////////// Bias and VBias /////////////////////////
+        
+        // Generate Random Bias and VBias
         double []  B = new double[OutLayerSize];
         double [] VB = new double[OutLayerSize];
         for (int i=0; i<OutLayerSize; ++i) {
              B[i] = Math.random();
             VB[i] = Math.random();
         }
-        for (int Y=0; Y<NumOutBlocks; ++Y) {
-            for (int addrY=0; addrY<OutBlockDim; ++addrY) {
-                mgr.setMappedRom("B"+ID+"Y"+Y,  addrY,  B[Y*OutBlockDim + addrY]);
-                mgr.setMappedRom("VB"+ID+"Y"+Y, addrY, VB[Y*OutBlockDim + addrY]);
-            }
-        }
+        
+        // Feed Random Bias and VBias into Kernel
+        double [] BiasInitData = new double[2*OutLayerSize];
+        for (int i=0; i<OutLayerSize; ++i) BiasInitData[i] = B[i];
+        for (int i=0; i<OutLayerSize; ++i) BiasInitData[OutLayerSize+i] = VB[i];
+        mgr.setInputData("BiasInitData", BiasInitData);
 
-        // Feed Random PrevLayer and PrevRyLayer
-        double []  y = new double[InLayerSize];
-        double [] Ry = new double[InLayerSize];
-        for (int i=0; i<InLayerSize; ++i) {
-             y[i] = Math.random();
-            if (ID==0) Ry[i] = 0;
-            else Ry[i] = Math.random();
-        }
-        double [][] PrevLayerData   = new double[InBlockDim*OutBlockDim][NumInBlocks];
-        double [][] PrevRyLayerData = new double[InBlockDim*OutBlockDim][NumInBlocks];
-        for (int i=0; i<OutBlockDim; ++i) {
-            for (int j=0; j<InBlockDim; ++j) {
-                int iter = i * InBlockDim + j;
-                for (int k=0; k<NumInBlocks; ++k) {
-                      PrevLayerData[iter][k] =  y[k*InBlockDim+j];
-                    PrevRyLayerData[iter][k] = Ry[k*InBlockDim+j];
-                }
-            }
-        }
-        List<Bits> PrevLayer   = VectorDataGenerator(PrevLayerData,   InBlockDim*OutBlockDim, NumInBlocks);
-        List<Bits> PrevRyLayer = VectorDataGenerator(PrevRyLayerData, InBlockDim*OutBlockDim, NumInBlocks);
-        mgr.setInputDataRaw("PrevLayer", PrevLayer);
-        mgr.setInputDataRaw("PrevRyLayer", PrevRyLayer);
+
+        ///////////////////////// Expected Output /////////////////////////        
 
         // Calculate Expected Output
         for (int iter=0; iter<OutBlockDim; ++iter) {
@@ -149,6 +212,9 @@ public class LayerTest {
             System.out.println("Iter["+iter+"] Y=("+ExpectedY[0]+","+ExpectedY[1]+","+ExpectedY[2]+","+ExpectedY[3]+"), "
                                          + "Ry=("+ExpectedRy[0]+","+ExpectedRy[1]+","+ExpectedRy[2]+","+ExpectedRy[3]+")");
         }
+
+
+        ///////////////////////// Run Test /////////////////////////
 
         // Run Test
         mgr.setKernelCycles(numTicks);
