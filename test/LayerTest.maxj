@@ -65,7 +65,7 @@ public class LayerTest {
         // Layer Block
         @SuppressWarnings("unused")
         Layer TestLayer = new Layer(this, ID, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
-                                    PrevLayer, PrevRyLayer, BiasInitData, beginInit, beginFwdProp);
+                                    PrevLayer, PrevRyLayer, BiasInitData, beginInit, beginInit, beginFwdProp);
 
         }
     }

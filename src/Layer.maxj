@@ -63,7 +63,8 @@ class Layer extends KernelLib{
             DFEVector<DFEVar> PrevLayer,
             DFEVector<DFEVar> PrevRyLayer,
             DFEVar BiasInitData,
-            DFEVar beginInit,
+            DFEVar beginWeightInit,
+            DFEVar beginBiasInit,
             DFEVar beginFwdProp
             )
     {
@@ -93,10 +94,10 @@ class Layer extends KernelLib{
     
 
     // Reset Signal for Initialisation
-    DFEVar InitReset = beginInit;
+    DFEVar WeightInitReset = beginWeightInit;
 
     // Top Level Control
-    AddrGenerator InitCounter = new AddrGenerator(owner, 1, 2*NumOutBlocks*BlockSize, InitReset);
+    AddrGenerator InitCounter = new AddrGenerator(owner, 1, 2*NumOutBlocks*BlockSize, WeightInitReset);
     DFEVar InitCount = InitCounter.getAddr();
     DFEVar isInit    = InitCounter.isValid();
     DFEVar isInitW   = isInit & (InitCount <  NumOutBlocks*BlockSize);
@@ -107,7 +108,7 @@ class Layer extends KernelLib{
                                                   .withInitValue(0)
                                                   .withMax(BlockSize)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                  .withReset(InitReset);
+                                                  .withReset(WeightInitReset);
     Counter WPortAddrCounter = control.count.makeCounter(WPortAddrCounterParam);
     DFEVar WPortAddr = WPortAddrCounter.getCount();
 
@@ -117,7 +118,7 @@ class Layer extends KernelLib{
                                                   .withMax(NumOutBlocks)
                                                   .withEnable(WPortAddrCounter.getWrap())
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                  .withReset(InitReset);
+                                                  .withReset(WeightInitReset);
     Counter YCounter = control.count.makeCounter(YCounterParam);
     DFEVar YCount = YCounter.getCount();
 
@@ -125,7 +126,7 @@ class Layer extends KernelLib{
     /////////////////////// Address Generation - Bias Initialisation ///////////////////////
 
     // BiasReset Signal for Initialisation
-    DFEVar BiasInitReset = beginInit;
+    DFEVar BiasInitReset = beginBiasInit;
 
     // Top Level Control
     AddrGenerator BiasInitCounter = new AddrGenerator(owner, 1, 2*NumOutBlocks*OutBlockDim, BiasInitReset);

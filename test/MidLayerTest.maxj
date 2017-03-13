@@ -78,8 +78,8 @@ public class MidLayerTest {
 
         // Layer Block
         @SuppressWarnings("unused")
-        MidLayer TestMidLayer = new MidLayer(this, 1, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
-                                             InputLatency, PrevLayer, PrevRyLayer, BiasInitData, beginInit, beginFwdProp);
+        MidLayer TestMidLayer = new MidLayer(this, 1, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks, InputLatency,
+                                             PrevLayer, PrevRyLayer, BiasInitData, beginInit, beginInit, beginFwdProp);
 
         }
     }
