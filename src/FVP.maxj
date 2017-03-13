@@ -20,6 +20,10 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
  * @param <AcFunc> Activation Function of each layer, note that AcFunc[0] is not used as Observation is given
  * @param <NumSamples> Number of samples to process (size of the data set)
  * @param <Observation> Input to the first layer (observation data)
+ *                      Note: During Initialisation, Observation is used to stream W and VW for each layer
+ * @param <BiasStdInitData> Initialisation Data for Bias, VBias, Std, and VStd
+ *                      Note: BiasStdInitData is Bias and VBias for each layer, to be followed by Std and VStd
+ * @param <beginInit> begin initialisation. Weight initialisation and bias initialisation are independent.
  * @param <beginFVPCalc> begin Fisher Vector Product Calculation for the data set
  *
  */
@@ -27,9 +31,15 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
 class FVP extends KernelLib{
 
-    private DFEVar EnInput;
+    private DFEVar EnObservationInput;
+    private DFEVar EnBiasStdInput;
+    private DFEVector<DFEVar> Mean;
+    private DFEVector<DFEVar> Ry;
     
-    public DFEVar getEnInput()                     {return EnInput;}
+    public DFEVar getEnObservationInput()       {return EnObservationInput;}
+    public DFEVar getEnBiasStdInput()           {return EnBiasStdInput;}
+    public DFEVector<DFEVar> getMean()          {return Mean;}
+    public DFEVector<DFEVar> getRy()            {return Ry;}
     
     FVP(  KernelLib owner,
           int NumLayers,
@@ -39,6 +49,8 @@ class FVP extends KernelLib{
           int NumSamples,
           int BufferDepth,
           DFEVector<DFEVar> Observation,
+          DFEVar BiasStdInitData,
+          DFEVar beginInit,
           DFEVar beginFVPCalc
           )
     {
@@ -81,6 +93,56 @@ class FVP extends KernelLib{
     
     // Tick
     DFEVar Tick = control.count.simpleCounter(32);
+
+    
+    /////////////////////// Control - Weight Initialisation ///////////////////////
+    
+    // Parameters
+    int FstLayerWeightInitCycles = 2 * BlockDim[0] * LayerSize[1];
+    int SndLayerWeightInitCycles = 2 * BlockDim[1] * LayerSize[2];
+    int TrdLayerWeightInitCycles = 2 * BlockDim[2] * LayerSize[3];
+    int WeightInitCycles = FstLayerWeightInitCycles + SndLayerWeightInitCycles + TrdLayerWeightInitCycles;
+    
+    // Weight Initialisation Counter
+    DFEVar beginWeightInit = beginInit;
+    AddrGenerator WeightInitCounter = new AddrGenerator(this, 1, WeightInitCycles, beginWeightInit);
+    DFEVar    WeightInitCount = WeightInitCounter.getAddr();
+    DFEVar isWeightInitiating = WeightInitCounter.isValid();
+    
+    // Control Signals for Each Layer
+    DFEVar beginWeightInitFstLayer = isWeightInitiating & (WeightInitCount === 0);
+    DFEVar beginWeightInitSndLayer = isWeightInitiating & (WeightInitCount === FstLayerWeightInitCycles);
+    DFEVar beginWeightInitTrdLayer = isWeightInitiating & (WeightInitCount === FstLayerWeightInitCycles + SndLayerWeightInitCycles);
+
+    // Weight Initialisation Signal for Non-First Layer - to be used in MUX
+    DFEVar isSndLayerWeightInitiating = isWeightInitiating & (WeightInitCount >= FstLayerWeightInitCycles) & 
+                                        (WeightInitCount < FstLayerWeightInitCycles + SndLayerWeightInitCycles);
+    DFEVar isTrdLayerWeightInitiating = isWeightInitiating & (WeightInitCount >= FstLayerWeightInitCycles + SndLayerWeightInitCycles);
+
+
+    /////////////////////// Control - Bias Initialisation ///////////////////////
+
+    // TODO Initialise Std after initialising Bias and VBias
+
+    // Parameters
+    int FstLayerBiasInitCycles = 2 * LayerSize[1];
+    int SndLayerBiasInitCycles = 2 * LayerSize[2];
+    int TrdLayerBiasInitCycles = 2 * LayerSize[3];
+    int BiasInitCycles = FstLayerBiasInitCycles + SndLayerBiasInitCycles + TrdLayerBiasInitCycles;
+    
+    // Bias Initialisation Counter
+    DFEVar beginBiasInit = beginInit;
+    AddrGenerator BiasInitCounter = new AddrGenerator(this, 1, BiasInitCycles, beginBiasInit);
+    DFEVar    BiasInitCount = BiasInitCounter.getAddr();
+    DFEVar isBiasInitiating = BiasInitCounter.isValid();
+    
+    // Control Signals for Each Layer
+    DFEVar beginBiasInitFstLayer = isBiasInitiating & (BiasInitCount === 0);
+    DFEVar beginBiasInitSndLayer = isBiasInitiating & (BiasInitCount === FstLayerBiasInitCycles);
+    DFEVar beginBiasInitTrdLayer = isBiasInitiating & (BiasInitCount === FstLayerBiasInitCycles + SndLayerBiasInitCycles);
+
+
+    /////////////////////// Control - Forward Propagation ///////////////////////
     
     // Total Counter
     AddrGenerator TotalCounter = new AddrGenerator(this, 1, TotalNumCycles, beginFVPCalc);
@@ -110,8 +172,15 @@ class FVP extends KernelLib{
     // Begin Forward Propagation for a new sample
     DFEVar beginNewSample = (InnerLoopCount === 0) & isFVPCalculating;
 
-    // Input Control signal for Observation
-    EnInput = beginNewSample;
+
+    /////////////////////// Overall Input Control ///////////////////////
+
+    // Input Control Signal for Observation
+    EnObservationInput = isWeightInitiating | beginNewSample;
+
+    // Input Control Signal for BiasStdInitData
+    EnBiasStdInput = isBiasInitiating;
+
 
     /////////////////////// Input Buffer ///////////////////////
 
@@ -143,8 +212,10 @@ class FVP extends KernelLib{
     /////////////////////// First Layer ///////////////////////
 
     // First Layer: Layer[0] => Layer[1]
-    DFEVar beginFwdProp_0 = beginNewSample;
-    Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], y_0, Ry_0, beginFwdProp_0);
+    DFEVar beginFwdPropFst = beginNewSample;
+    DFEVector<DFEVar> y_0_in = Observation;
+    Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], y_0_in, Ry_0,
+                                     BiasStdInitData, beginWeightInitFstLayer, beginBiasInitFstLayer, beginFwdPropFst);
     DFEVector<DFEVar>  y_1_toBuffer = FstLayer.getY();
     DFEVector<DFEVar> Ry_1_toBuffer = FstLayer.getRy();
     DFEVar FstLayerOutputValid      = FstLayer.isValid();
@@ -174,9 +245,14 @@ class FVP extends KernelLib{
     
     // Second Layer: Layer[1] => Layer[2]
     int MidLayerInputLatency = BlockDim[0];
-    DFEVar beginFwdProp_1 = FstLayerFirstResultReady;
+    DFEVar beginFwdPropSnd = FstLayerFirstResultReady;
+    DFEVector<DFEVar> y_1_in = y_1.getType().newInstance(this);
+    for (int i=0; i<NumBlocks[1]; ++i) {
+        y_1_in[i] <== isSndLayerWeightInitiating ? Observation[i] : y_1[i];
+    }
     MidLayer SndLayer = new MidLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2],
-                                             MidLayerInputLatency, y_1, Ry_1, beginFwdProp_1);
+                                           MidLayerInputLatency, y_1_in, Ry_1, BiasStdInitData, 
+                                           beginWeightInitSndLayer, beginBiasInitSndLayer, beginFwdPropSnd);
     DFEVector<DFEVar>  y_2_toBuffer = SndLayer.getY();
     DFEVector<DFEVar> Ry_2_toBuffer = SndLayer.getRy();
     DFEVar SndLayerOutputValid      = SndLayer.isValid();
@@ -199,13 +275,22 @@ class FVP extends KernelLib{
     /////////////////////// Third Layer ///////////////////////
 
     // Third Layer: Layer[2] => Layer[3]
-    DFEVar beginFwdProp_3 = SndLayerFirstResultReady;
-    Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], y_2, Ry_2, beginFwdProp_3);
+    DFEVar beginFwdPropTrd = SndLayerFirstResultReady;
+    DFEVector<DFEVar> y_2_in = y_2.getType().newInstance(this);
+    for (int i=0; i<NumBlocks[1]; ++i) {
+        y_2_in[i] <== isTrdLayerWeightInitiating ? Observation[i] : y_2[i];
+    }
+    Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], y_2_in, Ry_2, 
+                                     BiasStdInitData, beginWeightInitTrdLayer, beginBiasInitTrdLayer, beginFwdPropTrd);
     DFEVector<DFEVar>  y_3_toBuffer = TrdLayer.getY();
     DFEVector<DFEVar> Ry_3_toBuffer = TrdLayer.getRy();
     DFEVar TrdLayerOutputValid      = TrdLayer.isValid();
     DFEVar TrdLayerFirstResultReady = TrdLayer.isFirstItemReady();
     Buffer2ReadAddrCol <== TrdLayer.getInputReadOffsetAddr();
+
+    // Forward Propagation Result        
+    Mean =  y_3_toBuffer;
+    Ry   = Ry_3_toBuffer;
     
     
     
