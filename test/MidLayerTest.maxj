@@ -24,6 +24,9 @@ public class MidLayerTest {
     private final int NumOutBlocks = 4;
     private final int InputLatency = 10;
 
+    private final int WeightInitCycles = 2 * InBlockDim * OutBlockDim * NumOutBlocks;
+    private final int BiasInitCycles   = 2 * OutBlockDim * NumOutBlocks;
+    private final int FwdPropCycles    = InputLatency*InBlockDim;
 
     private class MidLayerTestKernel extends Kernel {
 
@@ -32,15 +35,30 @@ public class MidLayerTest {
 
         super(parameters);
 
-        /////////////////////// Control ///////////////////////
-        
+        ///////////////////////// Control /////////////////////////
+
         // TODO Current MidLayer Offset is 24, so make InputLatency larger than that
-    
+
         // Remarks - AddrGenerator cannot be reset at Tick 0, so postpone 1 cycle
         DFEVar Tick = control.count.simpleCounter(32);
-        DFEVar beginFwdProp = (Tick === 1);
-        AddrGenerator CompCounter = new AddrGenerator(this, 1, InputLatency*InBlockDim, beginFwdProp);
-        DFEVar isCalculating = CompCounter.isValid();
+        
+        // Initialisation
+        DFEVar beginInit = (Tick === 1);
+        
+        // Initialise Weight
+        AddrGenerator WeightInitCounter = new AddrGenerator(this, 1, WeightInitCycles, beginInit);
+        DFEVar isWeightInit = WeightInitCounter.isValid();          
+        
+        // Initialise Bias
+        AddrGenerator BiasInitCounter = new AddrGenerator(this, 1, BiasInitCycles, beginInit);
+        DFEVar isBiasInit = BiasInitCounter.isValid();        
+        
+        // Forward Propagation
+        DFEVar beginFwdProp = (Tick === WeightInitCycles + 10);
+        AddrGenerator ComputingCounter = new AddrGenerator(this, 1, FwdPropCycles, beginFwdProp);
+        DFEVar isCalculating = ComputingCounter.isValid();
+    
+        // beginNewRow
         Count.Params NewRowCounterParam = control.count.makeParams(16)
                                                    .withInitValue(0)
                                                    .withMax(InputLatency)
@@ -54,13 +72,14 @@ public class MidLayerTest {
         
         // Input to Layer Block - fixed point prevLayer and prevRyLayer
         DFEVectorType<DFEVar> InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
-        DFEVector<DFEVar>   PrevLayer = io.input("PrevLayer",   InVecType, beginNewRow);
+        DFEVector<DFEVar>   PrevLayer = io.input("PrevLayer",   InVecType, isWeightInit | beginNewRow);
         DFEVector<DFEVar> PrevRyLayer = io.input("PrevRyLayer", InVecType, beginNewRow);
+        DFEVar           BiasInitData = io.input("BiasInitData", Def.DataType, isBiasInit);
 
         // Layer Block
         @SuppressWarnings("unused")
         MidLayer TestMidLayer = new MidLayer(this, 1, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
-                                             InputLatency, PrevLayer, PrevRyLayer, beginFwdProp);
+                                             InputLatency, PrevLayer, PrevRyLayer, BiasInitData, beginInit, beginFwdProp);
 
         }
     }
@@ -69,7 +88,7 @@ public class MidLayerTest {
     public void testRandomInputData() {
     
         // Settings
-        final int numTicks = 500;
+        final int numTicks = WeightInitCycles + FwdPropCycles + 20;
         final int  InLayerSize =  InBlockDim * NumInBlocks;
         final int OutLayerSize = OutBlockDim * NumOutBlocks;
         final int   NumWeights = InLayerSize * OutLayerSize;
@@ -79,53 +98,77 @@ public class MidLayerTest {
         mgr.getCurrentKernelConfig().simulation.setRAMAddressCollisionBehaviour(KernelConfiguration.SimulationOptions.SimulationBehaviour.IGNORE);
         MidLayerTestKernel kernel = new MidLayerTestKernel(mgr.makeKernelParameters());
         mgr.setKernel(kernel);
+
+
+        ///////////////////////// Weight, VWeight, PrevLayer /////////////////////////
         
-        // Assign Regular Weight
+        // Generate Regular Weight and VWeight
         double []  W = new double[NumWeights];
         double [] VW = new double[NumWeights];
-//        for (int i=0; i<NumWeights; ++i) W[i] = Math.random();
         for (int X=0; X<NumInBlocks; ++X) {
             for (int Y=0; Y<NumOutBlocks; ++Y) {
                 int addr = 0;
                 for (int addrX=0; addrX<InBlockDim; ++addrX) {
                     for (int addrY=0; addrY<OutBlockDim; ++addrY) {               
-//                        double curWeight = W[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
                         double curWeight = X + 0.01 * (addrX*OutBlockDim + addrY);
                          W[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY] = curWeight;
                         VW[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY] = curWeight;
-                        mgr.setMappedRom("W1"+"X"+X+"Y"+Y,  addr, curWeight);
-                        mgr.setMappedRom("VW1"+"X"+X+"Y"+Y, addr, curWeight);
                         addr++;
                     }
                 }
             }
         }
-
-        // Assign Regular Bias
-        double []  B = new double[OutLayerSize];
-        double [] VB = new double[OutLayerSize];
-//        for (int i=0; i<OutLayerSize; ++i) B[i] = Math.random();
-        for (int Y=0; Y<NumOutBlocks; ++Y) {
-            for (int addrY=0; addrY<OutBlockDim; ++addrY) {
-                 B[Y*OutBlockDim + addrY] = addrY;
-                VB[Y*OutBlockDim + addrY] = addrY;
-                mgr.setMappedRom("B1"+"Y"+Y,  addrY,  B[Y*OutBlockDim + addrY]);
-                mgr.setMappedRom("VB1"+"Y"+Y, addrY, VB[Y*OutBlockDim + addrY]);
-            }
-        }
-
-        // Feed Random PrevLayer
+        
+        // Generate Regular PrevLayer
         // Note: There is no need to repeat, which is different from input layer
-        double [][] PrevLayerData = new double[InBlockDim][NumInBlocks];
+        double [][] y = new double[InBlockDim][NumInBlocks];
         for (int i=0; i<InBlockDim; ++i) {
             for (int j=0; j<NumInBlocks; ++j) {
-//                PrevLayerData[i][j] = Math.random();
-            PrevLayerData[i][j] = 0.1 * j + 0.01 * i;
+                y[i][j] = 0.1 * j + 0.01 * i;
             }
         }
-        List<Bits> PrevLayer = VectorDataGenerator(PrevLayerData, InBlockDim, NumInBlocks);
-        mgr.setInputDataRaw("PrevLayer", PrevLayer);
         
+        // Feed Regular Weight, VWeight and PrevLayer into PrevLayerData
+        double [][] PrevLayerData = new double[WeightInitCycles+InBlockDim][NumInBlocks];
+        // Feed Weight
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            for (int addrX=0; addrX<InBlockDim; ++addrX) {
+                for (int addrY=0; addrY<OutBlockDim; ++addrY) {
+                    int iter = Y*InBlockDim*OutBlockDim + addrX*OutBlockDim + addrY;   
+                    for (int X=0; X<NumInBlocks; ++X) {
+                        double curW = W[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
+                        PrevLayerData[iter][X] = curW;
+                    }
+                }
+            }
+        }
+        // Feed VWeight into PrevLayerData
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            for (int addrX=0; addrX<InBlockDim; ++addrX) {
+                for (int addrY=0; addrY<OutBlockDim; ++addrY) {
+                    int iter = InBlockDim*OutBlockDim*NumOutBlocks + Y*InBlockDim*OutBlockDim + addrX*OutBlockDim + addrY;   
+                    for (int X=0; X<NumInBlocks; ++X) {
+                        double curVW = VW[(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
+                        PrevLayerData[iter][X] = curVW;
+                    }
+                }
+            }
+        }                
+        // Feed PrevLayer into PrevLayerData
+        for (int addrX=0; addrX<InBlockDim; ++addrX) {
+            int iter = WeightInitCycles + addrX;
+            for (int X=0; X<NumInBlocks; ++X) {
+                PrevLayerData[iter][X] = y[addrX][X];
+            }
+        }
+
+        // PrevLayerData into Kernel
+        List<Bits> PrevLayer = VectorDataGenerator(PrevLayerData, WeightInitCycles+InBlockDim, NumInBlocks);   
+        mgr.setInputDataRaw("PrevLayer", PrevLayer);
+
+
+        ///////////////////////// PrevRyLayer /////////////////////////
+
         // Feed Random PrevRyLayer
         // Note: There is no need to repeat, which is different from input layer
         double [][] PrevRyLayerData = new double[InBlockDim][NumInBlocks];
@@ -134,8 +177,31 @@ public class MidLayerTest {
                 PrevRyLayerData[i][j] = Math.random();
             }
         }
+        
         List<Bits> PrevRyLayer = VectorDataGenerator(PrevRyLayerData, InBlockDim, NumInBlocks);
         mgr.setInputDataRaw("PrevRyLayer", PrevRyLayer);
+
+
+        ///////////////////////// Bias and VBias /////////////////////////
+        
+        // Generate Random Bias and VBias
+        double []  B = new double[OutLayerSize];
+        double [] VB = new double[OutLayerSize];
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            for (int addrY=0; addrY<OutBlockDim; ++addrY) {
+                 B[Y*OutBlockDim + addrY] = addrY;
+                VB[Y*OutBlockDim + addrY] = addrY;
+            }
+        }
+
+        // Feed Random Bias and VBias into Kernel
+        double [] BiasInitData = new double[2*OutLayerSize];
+        for (int i=0; i<OutLayerSize; ++i) BiasInitData[i] = B[i];
+        for (int i=0; i<OutLayerSize; ++i) BiasInitData[OutLayerSize+i] = VB[i];
+        mgr.setInputData("BiasInitData", BiasInitData);
+
+
+        ///////////////////////// Expected Output /////////////////////////  
 
         // Calculate Expected Output
         double [] PreAc_y  = new double[NumOutBlocks];
@@ -150,9 +216,9 @@ public class MidLayerTest {
                 for (int X=0; X<NumInBlocks; ++X) {
                     for (int addrX=0; addrX<InBlockDim; ++addrX) {
                         int RowNum = X*InBlockDim + addrX;
-                        Expected_y[Y]  +=  W[RowNum*OutLayerSize + ColNum] * PrevLayerData[addrX][X];
+                        Expected_y[Y]  +=  W[RowNum*OutLayerSize + ColNum] * PrevLayerData[WeightInitCycles+addrX][X];
                         Expected_Ry[Y] +=  W[RowNum*OutLayerSize + ColNum] * PrevRyLayerData[addrX][X];
-                        Expected_Ry[Y] += VW[RowNum*OutLayerSize + ColNum] * PrevLayerData[addrX][X];
+                        Expected_Ry[Y] += VW[RowNum*OutLayerSize + ColNum] * PrevLayerData[WeightInitCycles+addrX][X];
                     }
                 }
                 PreAc_y[Y]  = Expected_y[Y];
@@ -165,6 +231,9 @@ public class MidLayerTest {
             System.out.println("PreAc_Ry[1:4]["+addrY+"]=(" +PreAc_Ry[0] +","+PreAc_Ry[1] +","+PreAc_Ry[2] +","+PreAc_Ry[3] +") => "
                              +"y[1:4]["+addrY+"]=("+Expected_Ry[0]+","+Expected_Ry[1]+","+Expected_Ry[2]+","+Expected_Ry[3]+")");              
         }
+
+
+        ///////////////////////// Run Test /////////////////////////
 
         // Run Test
         mgr.setKernelCycles(numTicks);
