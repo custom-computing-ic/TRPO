@@ -69,8 +69,8 @@ public class TRPOManager extends CustomManager{
         }
         
         // Length of Observation Vector - Note that it's padded
-        int ObservVecLength = WeightInitVecLength + Def.NumSamples;
-        int ObservVecSize   = CPUTypes.DOUBLE.sizeInBytes() * Def.LayerSize[0] * ObservVecLength;
+        int ObservVecLength = WeightInitVecLength + Def.NumSamples * Def.LayerSize[0] / NumBlocks[0];
+        int ObservVecSize   = CPUTypes.DOUBLE.sizeInBytes() * NumBlocks[0] * ObservVecLength;
         ei.setStream("Observation", CPUTypes.DOUBLE, ObservVecSize);
 
 

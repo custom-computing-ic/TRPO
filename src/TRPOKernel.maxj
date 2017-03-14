@@ -68,10 +68,11 @@ class TRPOKernel extends Kernel {
                                 Observation, BiasStdInitData, beginInit, beginFVPCalc);
     EnObservationInput <== FVPCalc.getEnObservationInput();
     EnBiasStdInput     <== FVPCalc.getEnBiasStdInput();
-
+    
     // Forward Propagation Result
     DFEVector<DFEVar> Mean = FVPCalc.getMean();
     DFEVector<DFEVar> Ry   = FVPCalc.getRy();
+
 
 
     /////////////////////// Dummy Output ///////////////////////
@@ -81,6 +82,9 @@ class TRPOKernel extends Kernel {
     DFEVar   RySum = TreeReduce.reduce(new Add<DFEVar>(), Ry.getElementsAsList());
     DFEVar DummyOutput = (MeanSum + RySum).cast(Def.InputType);
     io.output("Output", DummyOutput, Def.InputType);
+
+
+
 
     }
 

@@ -292,6 +292,13 @@ class FVP extends KernelLib{
     Mean =  y_3_toBuffer;
     Ry   = Ry_3_toBuffer;
     
+
+    /////////////////////// Debug ///////////////////////
+
+    // Forward Propagation Results
+    debug.simPrintf(TrdLayerOutputValid, "[%3d] y[0:3]=(%.12f, %.12f, %.12f, %.12f), Ry[0:3]=(%.12f, %.12f, %.12f, %.12f)\n",
+                    Tick, Mean[0], Mean[1], Mean[2], Mean[3], Ry[0], Ry[1], Ry[2], Ry[3]);
+
     
     
     }

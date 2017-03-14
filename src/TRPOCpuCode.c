@@ -37,6 +37,9 @@ typedef struct {
     
     //////////////////// For FPGA Only ////////////////////
     
+    // LayerSize used in FPGA, with stream padding
+    size_t * PaddedLayerSize;
+    
     // Number of Blocks for Each Layer, i.e. Parallelism Factor
     size_t * NumBlocks;
     
@@ -1038,7 +1041,7 @@ int CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double Residu
 }
 
 
-int FVP_DFE (TRPOparam param, double *Result, double *Input)
+int FVP_FPGA (TRPOparam param, double *Result, double *Input)
 {
 
     //////////////////// Remarks ////////////////////
@@ -1055,14 +1058,18 @@ int FVP_DFE (TRPOparam param, double *Result, double *Input)
 
     //////////////////// Read Parameters ////////////////////
 
-    // Assign Parameters
+    // Assign Parameters - For CPU and FPGA
     const size_t NumLayers  = param.NumLayers;
     size_t * LayerSize      = param.LayerSize;
     const size_t NumSamples = param.NumSamples;
     char * ModelFile        = param.ModelFile;
     char * DataFile         = param.DataFile;
     const double CG_Damping = param.CG_Damping;
-    size_t * NumBlocks      = param.NumBlocks;
+    
+    // Assign Parameters - For FPGA Only
+    size_t * PaddedLayerSize = param.PaddedLayerSize;
+    size_t * NumBlocks       = param.NumBlocks;
+    
 
     // Dimension of Observation Space
     const size_t ObservSpaceDim = LayerSize[0];
@@ -1211,23 +1218,25 @@ int FVP_DFE (TRPOparam param, double *Result, double *Input)
     //////////////////// FPGA - Initialisation ////////////////////
 
 	// Load Maxfile and Engine
-	fprintf(stderr, "[INFO] Initialising FPGA...");
+	fprintf(stderr, "[INFO] Initialising FPGA...\n");
 	max_file_t*  maxfile = TRPO_init();
 	max_engine_t* engine = max_load(maxfile, "*");
 
+    fprintf(stderr, "[INFO] Loading Model and Simulation Data...\n");
+
     // Calculate BlockDim
     size_t * BlockDim = (size_t *) calloc(NumLayers, sizeof(size_t));
-    for (int i=0; i<NumLayers; ++i) BlockDim[i] = LayerSize[i] / NumBlocks[i];
+    for (int i=0; i<NumLayers; ++i) BlockDim[i] = PaddedLayerSize[i] / NumBlocks[i];
 
     // Length of Weight and VWeight Initialisation Vector
     int WeightInitVecLength = 0;
     for (size_t i=0; i<NumLayers-1; ++i) {
-        WeightInitVecLength += 2 * LayerSize[i] * LayerSize[i+1] / NumBlocks[i];
+        WeightInitVecLength += 2 * BlockDim[i] * PaddedLayerSize[i+1];
     }
 
     // Length of Observation Vector
     // TODO Stream Padding if necessary
-    size_t ObservVecLength = WeightInitVecLength + NumSamples;
+    size_t ObservVecLength = WeightInitVecLength + NumSamples*BlockDim[0];
     size_t ObservVecWidth  = NumBlocks[0]; 
     double * Observation = (double *) calloc(ObservVecLength*ObservVecWidth, sizeof(double));
     
@@ -1245,8 +1254,14 @@ int FVP_DFE (TRPOparam param, double *Result, double *Input)
             for (size_t addrX=0; addrX<InBlockDim; ++addrX) {
                 for (size_t addrY=0; addrY<OutBlockDim; ++addrY) {
                     for (int X=0; X<NumInBlocks; ++X) {
-                        double curW = W[ID][(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
-                        Observation[RowNum*ObservVecWidth+X] = curW;
+                        size_t RowNumPadded = X*InBlockDim + addrX;
+                        size_t RowNumLimit  = LayerSize[ID];
+                        size_t ColNumPadded = Y*OutBlockDim + addrY;
+                        size_t ColNumLimit  = LayerSize[ID+1];
+                        if ( (RowNumPadded < RowNumLimit) && (ColNumPadded < ColNumLimit) ) {
+                            Observation[RowNum*ObservVecWidth+X] = W[ID][RowNumPadded*OutLayerSize + ColNumPadded];
+                        }
+                        else Observation[RowNum*ObservVecWidth+X] = 0;
                     }
                     RowNum++;
                 }
@@ -1257,22 +1272,31 @@ int FVP_DFE (TRPOparam param, double *Result, double *Input)
             for (size_t addrX=0; addrX<InBlockDim; ++addrX) {
                 for (size_t addrY=0; addrY<OutBlockDim; ++addrY) {
                     for (size_t X=0; X<NumInBlocks; ++X) {
-                        double curVW = VW[ID][(X*InBlockDim+addrX)*OutLayerSize + Y*OutBlockDim + addrY];
-                        Observation[RowNum*ObservVecWidth+X] = curVW;
+                        size_t RowNumPadded = X*InBlockDim + addrX;
+                        size_t RowNumLimit  = LayerSize[ID];
+                        size_t ColNumPadded = Y*OutBlockDim + addrY;
+                        size_t ColNumLimit  = LayerSize[ID+1];
+                        if ( (RowNumPadded < RowNumLimit) && (ColNumPadded < ColNumLimit) ) {                        
+                            Observation[RowNum*ObservVecWidth+X] = VW[ID][RowNumPadded*OutLayerSize + ColNumPadded];
+                        }
+                        else Observation[RowNum*ObservVecWidth+X] = 0;
                     }
                     RowNum++;
                 }
             }
         }
     }
+    
     // Feed actual observation data into Observation
     for (size_t iter=0; iter<NumSamples; ++iter) {
         size_t  InBlockDim = BlockDim[0];
         size_t NumInBlocks = NumBlocks[0];
         for (int addrX=0; addrX<InBlockDim; ++addrX) {
             for (int X=0; X<NumInBlocks; ++X) {
-                double curObserv = Observ[iter*ObservSpaceDim + X*InBlockDim + addrX];
-                Observation[RowNum*ObservVecWidth+X] = curObserv;
+                size_t RowNumPadded = X*InBlockDim + addrX;
+                size_t RowNumLimit  = LayerSize[0];
+                if (RowNumPadded<RowNumLimit) Observation[RowNum*ObservVecWidth+X] = Observ[iter*ObservSpaceDim+RowNumPadded];
+                else Observation[RowNum*ObservVecWidth+X] = 0;
             }
             RowNum++;
         }
@@ -1281,20 +1305,23 @@ int FVP_DFE (TRPOparam param, double *Result, double *Input)
     // Length of BiasStd Vector
     size_t BiasStdVecLength = 0;
     for (size_t i=1; i<NumLayers; ++i) {
-        BiasStdVecLength += 2*LayerSize[i];
-    }    
+        BiasStdVecLength += 2*PaddedLayerSize[i];
+    }
     double * BiasStd = (double *) calloc(BiasStdVecLength, sizeof(double));
     
     // Feed Bias and VBias into BiasStd
     RowNum = 0;
     for (size_t ID=0; ID<NumLayers-1; ++ID) {
-        size_t nextLayerDim = LayerSize[ID+1];
+        size_t nextLayerDim = PaddedLayerSize[ID+1];
+        size_t nextLayerDimLimit = LayerSize[ID+1];
         for (size_t k=0; k<nextLayerDim; ++k) {
-            BiasStd[RowNum] = B[ID][k];
+            if (k<nextLayerDimLimit) BiasStd[RowNum] = B[ID][k];
+            else BiasStd[RowNum] = 0;
             RowNum++;
         }
         for (size_t k=0; k<nextLayerDim; ++k) {
-            BiasStd[RowNum] = VB[ID][k];
+            if (k<nextLayerDimLimit) BiasStd[RowNum] = VB[ID][k];
+            else BiasStd[RowNum] = 0;
             RowNum++;
         }
     }
@@ -1303,14 +1330,23 @@ int FVP_DFE (TRPOparam param, double *Result, double *Input)
     //////////////////// FPGA - Run ////////////////////
     
     // Number of Ticks to Run
-    int NumCompCycles = BlockDim[0] * BlockDim[1] + 20;
-    int NumTicks = WeightInitVecLength + 10 + NumCompCycles * NumSamples;
+    size_t NumCompCycles = BlockDim[0] * BlockDim[1] + 20;
+    size_t NumTicks = WeightInitVecLength + 10 + NumCompCycles * NumSamples;
     
     // Allocation Memory Space for Dummy Output
     double * Output = (double *) calloc(NumTicks, sizeof(double));
-    
+
+    // Init Advanced Static Interface
+    TRPO_RunTRPO_actions_t run_action;
+    run_action.param_Ticks          = NumTicks;
+    run_action.instream_Observation = Observation;
+    run_action.instream_BiasStd     = BiasStd;
+    run_action.outstream_Output     = Output;
+
     // Run DFE
-    TRPO_RunTRPO(NumTicks, BiasStd, Observation, Output);
+    fprintf(stderr, "[INFO] Running on FPGA...\n");
+    TRPO_RunTRPO_run(engine, &run_action);
+    fprintf(stderr, "[INFO] Running on FPGA...Done\n");
 
     // Free Engine and Maxfile
     max_unload(engine);
@@ -1327,6 +1363,8 @@ int FVP_DFE (TRPOparam param, double *Result, double *Input)
 
     //////////////////// Clean Up ////////////////////
 
+    fprintf(stderr, "[INFO] Clean up...\n");
+
     // Free Memories Allocated for Reading Files
     for (size_t i=0; i<NumLayers-1; ++i) {
         free(W[i]); free(VW[i]);
@@ -1335,7 +1373,8 @@ int FVP_DFE (TRPOparam param, double *Result, double *Input)
     free(Observ); free(Mean); free(Std); free(VLogStd);
 
     // Free Memories Allocated for DFE
-    free(Observation); free(BiasStd); free(Output);
+    free(Observation); free(BiasStd); 
+    free(Output);
 
     return 0;
 }
@@ -1570,18 +1609,97 @@ void SwimmerCGTest()
 }
 
 
+void AntTestFPGA() {
+
+    // Ant-v1
+    char            AcFunc [] = {'l', 't', 't', 'l'};
+    size_t       LayerSize [] = {111, 64, 32, 8};
+    size_t PaddedLayerSize [] = {128, 64, 32, 8};
+    size_t       NumBlocks [] = { 32,  8,  8, 4};
+
+    char * ModelFileName = "AntTestModel.txt";
+    char * DataFileName  = "AntTestData.txt";
+    char * FVPFileName   = "AntTestFVP.txt";
+
+    TRPOparam Param;
+    Param.ModelFile         = ModelFileName;
+    Param.DataFile          = DataFileName;
+    Param.NumLayers         = 4;
+    Param.AcFunc            = AcFunc;
+    Param.LayerSize         = LayerSize;
+    Param.PaddedLayerSize   = PaddedLayerSize;
+    Param.NumBlocks         = NumBlocks;
+    Param.NumSamples        = 10;           // Note that thre are 50007 items
+    Param.CG_Damping        = 0.1;
+
+    // Open Simulation Data File that contains test data
+    FILE *DataFilePointer = fopen(FVPFileName, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
+        return;
+    }
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double * input   = (double *) calloc(NumParams, sizeof(double));
+    double * result  = (double *) calloc(NumParams, sizeof(double));
+    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
+    
+    // Read Input and Expect
+    for (size_t i=0; i<NumParams; ++i) {
+         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
+    }
+    fclose(DataFilePointer);
+
+    int FVPStatus = FVPFast(Param, result, input);
+    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
+
+
+    //////////////////// FPGA ////////////////////
+
+    FVP_FPGA(Param, result, input);
+
+
+/*
+    
+    // Check Result
+    double percentage_err = 0;
+    for (size_t i=0; i<NumParams; ++i) {        
+        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
+    	if (expect[i] != 0) percentage_err += cur_err;
+    	if (cur_err>0.1) printf("FVP[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
+    }
+    percentage_err = percentage_err / (double)NumParams;
+    printf("--------------------------- Swimmer Test ----------------------------\n");
+    printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("---------------------------------------------------------------------\n\n");
+*/
+
+
+    // Clean Up    
+    free(input); free(result); free(expect);
+    
+    return;
+
+}
+
+
+
 int main()
 {
 
     //////////////////// Fisher Vector Product Computation ////////////////////
     
-    SimpleTest();
-    PendulumTest();
-    SwimmerTest();
-    SwimmerCGTest();
+//    SimpleTest();
+//    PendulumTest();
+//    SwimmerTest();
+//    SwimmerCGTest();
 
 
     //////////////////// FPGA ////////////////////
+
+    AntTestFPGA();
+
 
 
     return 0;

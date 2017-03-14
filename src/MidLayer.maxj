@@ -301,7 +301,7 @@ class MidLayer extends KernelLib{
 
 
     // For Debug
-    debug.simPrintf(ColAddrValid, "[%3d] W[%d][%d]=[%.2f, %.2f, %.2f, %.2f], IN=[%.2f, %.2f, %.2f, %.2f], Bias[%d]=%.2f, Temp[%d]=>%2.6f | PreAc_y[0]=%2.6f => y_0=%f, Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WGridVec[0][0], WGridVec[0][1], WGridVec[0][2], WGridVec[0][3], PrevLayer[0], PrevLayer[1], PrevLayer[2], PrevLayer[3], ColAddr, Bias[0], ColAddr, Temp_y[0], NewPreAc_y[0], YVec[0], Valid);
+//    debug.simPrintf(ColAddrValid, "[%3d] W[%d][%d]=[%.2f, %.2f, %.2f, %.2f], IN=[%.2f, %.2f, %.2f, %.2f], Bias[%d]=%.2f, Temp[%d]=>%2.6f | PreAc_y[0]=%2.6f => y_0=%f, Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WGridVec[0][0], WGridVec[0][1], WGridVec[0][2], WGridVec[0][3], PrevLayer[0], PrevLayer[1], PrevLayer[2], PrevLayer[3], ColAddr, Bias[0], ColAddr, Temp_y[0], NewPreAc_y[0], YVec[0], Valid);
 //    debug.simPrintf(Valid, "[%3d] PreAc_y[0:3][%d] = [%.6f, %.6f, %.6f, %.6f] => y[0:3][%d] = (%.12f,%.12f,%.12f,%.12f)\n", control.count.simpleCounter(32), ColAddr, NewPreAc_y[0], NewPreAc_y[1], NewPreAc_y[2], NewPreAc_y[3], ColAddr, YVec[0], YVec[1], YVec[2], YVec[3]);
 //    debug.simPrintf(Valid, "[%3d] Y[0:3][%d]=(%.12f,%.12f,%.12f,%.12f), Ry=(%.12f,%.12f,%.12f,%.12f) | Valid=%d \n", control.count.simpleCounter(32), ColAddr, YVec[0], YVec[1], YVec[2], YVec[3], RyVec[0], RyVec[1], RyVec[2], RyVec[3], Valid);
 
