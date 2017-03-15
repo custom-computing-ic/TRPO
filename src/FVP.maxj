@@ -8,6 +8,7 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
+import java.lang.Math;
 
 /**
  * Propagation: Several layers connected together to formulate a neural network
@@ -79,6 +80,7 @@ class FVP extends KernelLib{
     for (int i=0; i<NumLayers; ++i) BlockDim[i] = LayerSize[i] / NumBlocks[i];
 
     // Number of Cycles needed to do forward and backward propagation for one sample
+    // TODO Need to consider OutBlockDimCycleTime
     int NumCyclesPerSample = BlockDim[0] * BlockDim[1] + 200;
     
     // TODO Pipelining between successive inputs
@@ -114,7 +116,8 @@ class FVP extends KernelLib{
     DFEVar beginWeightInitSndLayer = isWeightInitiating & (WeightInitCount === FstLayerWeightInitCycles);
     DFEVar beginWeightInitTrdLayer = isWeightInitiating & (WeightInitCount === FstLayerWeightInitCycles + SndLayerWeightInitCycles);
 
-    // Weight Initialisation Signal for Non-First Layer - to be used in MUX
+    // Weight Initialisation Signal - Selection Signal to be used in MUX
+    DFEVar isFstLayerWeightInitiating = isWeightInitiating & (WeightInitCount  < FstLayerWeightInitCycles);
     DFEVar isSndLayerWeightInitiating = isWeightInitiating & (WeightInitCount >= FstLayerWeightInitCycles) & 
                                         (WeightInitCount < FstLayerWeightInitCycles + SndLayerWeightInitCycles);
     DFEVar isTrdLayerWeightInitiating = isWeightInitiating & (WeightInitCount >= FstLayerWeightInitCycles + SndLayerWeightInitCycles);
@@ -169,14 +172,16 @@ class FVP extends KernelLib{
     Counter OuterLoopCounter = control.count.makeCounter(OuterLoopCounterParam);
     DFEVar OuterLoopCount = OuterLoopCounter.getCount();
     
-    // Begin Forward Propagation for a new sample
+    // Counter for Controlled Input
     DFEVar beginNewSample = (InnerLoopCount === 0) & isFVPCalculating;
+    AddrGenerator NewSampleInputCounter = new AddrGenerator(this, 1, BlockDim[0], beginNewSample);
+    DFEVar isStreamingNewSample = NewSampleInputCounter.isValid();
 
 
     /////////////////////// Overall Input Control ///////////////////////
 
     // Input Control Signal for Observation
-    EnObservationInput = isWeightInitiating | beginNewSample;
+    EnObservationInput = isWeightInitiating | isStreamingNewSample;
 
     // Input Control Signal for BiasStdInitData
     EnBiasStdInput = isBiasInitiating;
@@ -201,6 +206,7 @@ class FVP extends KernelLib{
     DFEVar InBufferWrAddrRow = BufferWrAddrRow;
     DFEVar beginInBufferWrite = beginNewSample;
     // TODO Need to modify InputBuffer.maxj and add control logic to support back propagation
+    // TODO Currently ReadAddr (for back propagation) is invalid
     DFEVar InBufferReadAddrRow = constant.var(dfeUInt(MathUtils.bitsToAddress(BufferDepth)), 2);
     DFEVar beginInBufferRead = constant.var(dfeUInt(1), 0);
     InputBuffer Buffer0 = new InputBuffer(this, BlockDim[0], NumBlocks[0], BufferDepth, Observation, 
@@ -213,7 +219,10 @@ class FVP extends KernelLib{
 
     // First Layer: Layer[0] => Layer[1]
     DFEVar beginFwdPropFst = beginNewSample;
-    DFEVector<DFEVar> y_0_in = Observation;
+    DFEVector<DFEVar> y_0_in = y_0.getType().newInstance(this);
+    for (int i=0; i<NumBlocks[0]; ++i) {
+        y_0_in[i] <== isFstLayerWeightInitiating ? Observation[i] : y_0[i];
+    }
     Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], y_0_in, Ry_0,
                                      BiasStdInitData, beginWeightInitFstLayer, beginBiasInitFstLayer, beginFwdPropFst);
     DFEVector<DFEVar>  y_1_toBuffer = FstLayer.getY();
@@ -242,16 +251,18 @@ class FVP extends KernelLib{
     //      Ideally, there should be min(OutBlockDim, CompLatency) of MidLayer >= InBlockDim of FstLayer
     //      If RowAddr mismatch happens, consider Buffer1ReadAddrRow = Reductions.streamHold(Buffer1WriteAddrRow, Buffer1beginWrFwdData);
     //      However this only works when MidLayer finishes current sample before InLayer outputs the first result of next item
+    //
+    // TODO Pay special attention to OutBlockDimCycleTime = max(BlockDim[0], BlockDim[2], CompLatency)
     
     // Second Layer: Layer[1] => Layer[2]
-    int MidLayerInputLatency = BlockDim[0];
+    int OutBlockDimCycleTime = Math.max(BlockDim[0], BlockDim[2]);
     DFEVar beginFwdPropSnd = FstLayerFirstResultReady;
     DFEVector<DFEVar> y_1_in = y_1.getType().newInstance(this);
     for (int i=0; i<NumBlocks[1]; ++i) {
         y_1_in[i] <== isSndLayerWeightInitiating ? Observation[i] : y_1[i];
     }
     MidLayer SndLayer = new MidLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2],
-                                           MidLayerInputLatency, y_1_in, Ry_1, BiasStdInitData, 
+                                           OutBlockDimCycleTime, y_1_in, Ry_1, BiasStdInitData,
                                            beginWeightInitSndLayer, beginBiasInitSndLayer, beginFwdPropSnd);
     DFEVector<DFEVar>  y_2_toBuffer = SndLayer.getY();
     DFEVector<DFEVar> Ry_2_toBuffer = SndLayer.getRy();
@@ -277,7 +288,7 @@ class FVP extends KernelLib{
     // Third Layer: Layer[2] => Layer[3]
     DFEVar beginFwdPropTrd = SndLayerFirstResultReady;
     DFEVector<DFEVar> y_2_in = y_2.getType().newInstance(this);
-    for (int i=0; i<NumBlocks[1]; ++i) {
+    for (int i=0; i<NumBlocks[2]; ++i) {
         y_2_in[i] <== isTrdLayerWeightInitiating ? Observation[i] : y_2[i];
     }
     Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], y_2_in, Ry_2, 
@@ -295,9 +306,10 @@ class FVP extends KernelLib{
 
     /////////////////////// Debug ///////////////////////
 
+    debug.simPrintf(beginNewSample, "[%4d] >>>>>>>>>>>> Begin Sample [%d] >>>>>>>>>>>>\n", Tick, OuterLoopCount);
+
     // Forward Propagation Results
-    debug.simPrintf(TrdLayerOutputValid, "[%3d] y[0:3]=(%.12f, %.12f, %.12f, %.12f), Ry[0:3]=(%.12f, %.12f, %.12f, %.12f)\n",
-                    Tick, Mean[0], Mean[1], Mean[2], Mean[3], Ry[0], Ry[1], Ry[2], Ry[3]);
+    debug.simPrintf(TrdLayerOutputValid, "[%4d] y[0:3]=(%.12f, %.12f, %.12f, %.12f), Ry[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Mean[0], Mean[1], Mean[2], Mean[3], Ry[0], Ry[1], Ry[2], Ry[3]);
 
     
     

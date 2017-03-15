@@ -856,8 +856,37 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                         return -1;
                     }
                 }
-
+                
             }
+/*
+            // For Hardware Debug - Print
+            size_t NumBlocks = param.NumBlocks[i+1];
+            size_t ActualSize = LayerSize[i+1];
+            size_t BlockDim = (size_t) ceil( (double)ActualSize/(double)NumBlocks );
+            printf(">>>>>>>>>>>> Begin Sample [%zu] Layer [%zu] >>>>>>>>>>>>\n", iter, i+1);
+            for (size_t dim=0; dim<BlockDim; ++dim) {
+                printf("y[0:%zu]=(", NumBlocks-1);
+                for (size_t blk=0; blk<NumBlocks; ++blk) {
+                    size_t pos = blk*BlockDim + dim;
+                    if (pos < ActualSize) {
+                        printf("[%zu]=%.12f", pos, Layer[i+1][pos]);
+                        if (blk<NumBlocks-1) printf(", ");
+                    }
+                    else printf("0, ");
+                }
+
+                printf("), Ry[0:%zu]=(", NumBlocks-1);
+                for (size_t blk=0; blk<NumBlocks; ++blk) {
+                    size_t pos = blk*BlockDim + dim;
+                    if (pos < ActualSize) {
+                        printf("%.12f", RyLayer[i+1][pos]);
+                        if (blk<NumBlocks-1) printf(", ");
+                    }
+                    else printf("0, ");
+                }
+                printf(")\n");
+            }
+*/
         }
 
         // Check whether the forward propagation output is correct
@@ -866,6 +895,34 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
             double expected = Mean[iter*ActionSpaceDim+i];
             double err      = abs( (output - expected) / expected ) * 100;
             if (err>0.1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
+        }
+
+
+        // For Hardware Debug - Print
+        size_t NumBlocks = param.NumBlocks[NumLayers-1];
+        size_t ActualSize = ActionSpaceDim;
+        size_t BlockDim = (size_t) ceil( (double)param.PaddedLayerSize[NumLayers-1]/(double)NumBlocks );
+        printf(">>>>>>>>>>>> Begin Sample [%zu] >>>>>>>>>>>>\n", iter);
+        for (size_t i=0; i<BlockDim; ++i) {
+            printf("y[0:%zu]=(", NumBlocks-1);
+            for (size_t j=0; j<NumBlocks; ++j) {
+                size_t pos = j*BlockDim + i;
+                if (pos < ActualSize) {
+                    printf("%.12f", Layer[NumLayers-1][pos]);
+                    if (j<NumBlocks-1) printf(", ");
+                }
+                else printf("0, ");
+            }
+            printf("), Ry[0:%zu]=(", NumBlocks-1);
+            for (size_t j=0; j<NumBlocks; ++j) {
+                size_t pos = j*BlockDim + i;
+                if (pos < ActualSize) {
+                    printf("%.12f", RyLayer[NumLayers-1][pos]);
+                    if (j<NumBlocks-1) printf(", ");
+                }
+                else printf("0, ");
+            }
+            printf(")\n");
         }
 
 
@@ -1330,7 +1387,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     //////////////////// FPGA - Run ////////////////////
     
     // Number of Ticks to Run
-    size_t NumCompCycles = BlockDim[0] * BlockDim[1] + 20;
+    size_t NumCompCycles = BlockDim[0] * BlockDim[1] + 200;
     size_t NumTicks = WeightInitVecLength + 10 + NumCompCycles * NumSamples;
     
     // Allocation Memory Space for Dummy Output
@@ -1611,6 +1668,19 @@ void SwimmerCGTest()
 
 void AntTestFPGA() {
 
+
+    // Swimmer-v1
+    char            AcFunc [] = {'l', 't', 't', 'l'};
+    size_t       LayerSize [] = {  8, 64, 64, 2};
+    size_t PaddedLayerSize [] = { 32, 64, 64, 8};
+    size_t       NumBlocks [] = {  4,  4,  4, 4};
+
+
+    char * ModelFileName = "SwimmerTestModel.txt";
+    char * DataFileName  = "SwimmerTestData.txt";
+    char * FVPFileName   = "SwimmerTestFVP.txt";
+
+/*
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {111, 64, 32, 8};
@@ -1620,7 +1690,7 @@ void AntTestFPGA() {
     char * ModelFileName = "AntTestModel.txt";
     char * DataFileName  = "AntTestData.txt";
     char * FVPFileName   = "AntTestFVP.txt";
-
+*/
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;

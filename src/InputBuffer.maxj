@@ -20,9 +20,9 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
  * @param <NumBlocks> Vector Width of Input Vector => InputDim = BlockDim * NumBlocks
  * @param <BufferDepth> Depth of the Buffer (Number of vectors buffered)
  * @param <DataIn> Input Vector to be stored in the buffer
- * @param <WriteAddr> Buffer Write Address, range [0, BufferDepth-1]
+ * @param <WriteAddrRow> Buffer Write Row Address, range [0, BufferDepth-1]
  * @param <beginWrite> Begin writing a vector to buffer 
- * @param <ReadAddr> Buffer Read Address, range [0, BufferDepth-1]
+ * @param <ReadAddrRow> Buffer Read Row Address, range [0, BufferDepth-1]
  * @param <beginRead> Begin reading a vector from buffer
  *
  * Remarks: 
@@ -44,9 +44,9 @@ class InputBuffer extends KernelLib{
                     int NumBlocks,
                     int BufferDepth,
                     DFEVector<DFEVar> DataIn,
-                    DFEVar WriteAddr,
+                    DFEVar WriteAddrRow,
                     DFEVar beginWrite,
-                    DFEVar ReadAddr,
+                    DFEVar ReadAddrRow,
                     DFEVar beginRead)
     {
     
@@ -64,7 +64,8 @@ class InputBuffer extends KernelLib{
                                                   .withReset(beginWrite);
     Counter PortAddrColCounter = control.count.makeCounter(PortAddrColCounterParam);
     DFEVar PortAddrCol = PortAddrColCounter.getCount();
-    DFEVar PortAddr = WriteAddr.cast(AddrType) * BlockDim + PortAddrCol.cast(AddrType);
+    DFEVar PortAddr = WriteAddrRow.cast(AddrType) * BlockDim + PortAddrCol.cast(AddrType);
+
     // Write is valid only during the first iteration, then iteratively read this vector for several times.
     AddrGenerator WriteCounter = new AddrGenerator(this, 1, BlockDim, beginWrite);
     DFEVar WriteValid = WriteCounter.isValid();    
@@ -72,7 +73,7 @@ class InputBuffer extends KernelLib{
     // Read Address
     AddrGenerator RdAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginRead);
     DFEVar ReadAddrCol = RdAddrColCounter.getAddr();
-    DFEVar BlockReadAddr = ReadAddr.cast(AddrType) * BlockDim + ReadAddrCol.cast(AddrType);
+    DFEVar BlockReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + ReadAddrCol.cast(AddrType);
 
     /////////////////////// Memory Allocation ///////////////////////
 

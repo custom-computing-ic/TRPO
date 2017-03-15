@@ -189,7 +189,7 @@ class Layer extends KernelLib{
     InputReadOffsetAddr = RowAddr;
     
     // The first item of the result is ready at the end of the first iteration
-    FirstItemReady = RowAddrCounter.getWrap() & (ColAddr === 0);
+    FirstItemReady = isCalculating & RowAddrCounter.getWrap() & (ColAddr === 0);
     
     // The result is valid on the last cycle of each inner loop iteration
     Valid = isCalculating & RowAddrCounter.getWrap();
@@ -233,6 +233,9 @@ class Layer extends KernelLib{
     Accumulator.Params Param = Reductions.accumulator.makeAccumulatorConfig(Def.DataType)
                                                      .withEnable(isCalculating)
                                                      .withClear(stream.offset(RowAddr, 1)===0);
+    // For Debug
+    DFEVector<DFEVar> PrevAcY = OutVecType.newInstance(this);
+
     // Calculate Y and Ry
     // TODO: Optimise bit width to avoid overflow
     YVec  = OutVecType.newInstance(this);
@@ -248,6 +251,8 @@ class Layer extends KernelLib{
         DFEVar sum_Ry = Reductions.accumulator.makeAccumulator(toAccumulator_Ry, Param);
         DFEVar prevActivated_y  = sum_y  +  Bias[Y];
         DFEVar prevActivated_Ry = sum_Ry + VBias[Y];
+        // For Debug
+        PrevAcY[Y] <== prevActivated_y;
         switch (AcFunc) {
             case 't': {
                 DFEVar Activated_y = tanh(prevActivated_y);
@@ -257,7 +262,7 @@ class Layer extends KernelLib{
             }
             case 'l': {
                  YVec[Y] <== prevActivated_y;
-                RyVec[Y] <== prevActivated_y;
+                RyVec[Y] <== prevActivated_Ry;
                 break;
             }
             default: {
@@ -266,10 +271,29 @@ class Layer extends KernelLib{
         }
     }
     
-    // For Debug
-//    debug.simPrintf(Valid, "[%3d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WReadAddr, ColAddr, YVec[0], YVec[1], YVec[2], YVec[3], ColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], Valid);
+/*
+    // For Simulation
+    debug.simPrintf(WeightInitReset, "[%4d] Layer[%d] Begin Init Weights...\n", control.count.simpleCounter(32), ID);
+    debug.simPrintf(BiasInitReset, "[%4d] Layer[%d] Begin Init Bias...\n", control.count.simpleCounter(32), ID);
 
+    if (ID==0) {
+        // Check PreActivated Value - Assuming NumOutBlocks=8 (AntTest)
+        // debug.simPrintf(Valid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:7][%2d]=(%.12f,%.12f,%.12f,%.12f, %.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WReadAddr, ColAddr, PrevAcY[0], PrevAcY[1], PrevAcY[2], PrevAcY[3], PrevAcY[4], PrevAcY[5], PrevAcY[6], PrevAcY[7], Valid);
 
+        // Check Activated Value - Assuming NumOutBlocks=8 (AntTest)
+        // debug.simPrintf(Valid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:7][%2d]=(%.12f,%.12f,%.12f,%.12f, %.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WReadAddr, ColAddr, YVec[0], YVec[1], YVec[2], YVec[3], YVec[4], YVec[5], YVec[6], YVec[7], Valid);
+
+        // Check Computation - Assuming NumOutBlock=4 (SwimmerTest)
+        // debug.simPrintf(isCalculating, "[%4d] W[%2d][%2d]=W[%2d] | W[0:3][0]=(%f, %f, %f, %f), prev=(%f, %f, %f, %f) | PreAc_y = %f, y=%f | Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WReadAddr, WGridVec[0][0], WGridVec[0][1], WGridVec[0][2], WGridVec[0][3], PrevLayer[0], PrevLayer[1], PrevLayer[2], PrevLayer[3], PrevAcY[0], YVec[0], Valid);
+
+//        debug.simPrintf(Valid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WReadAddr, ColAddr, YVec[0], YVec[1], YVec[2], YVec[3], ColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], Valid);
+    }
+*/
+
+/*
+    // For jUnit Tests
+    debug.simPrintf(Valid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WReadAddr, ColAddr, YVec[0], YVec[1], YVec[2], YVec[3], ColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], Valid);
+*/
 	}
 
     /////////////////////// Activation Functions ///////////////////////

@@ -14,10 +14,15 @@ class Def {
     // Kernel Settings
     public static final int NumLayers     = 4;
     public static final int NumSamples    = 10;
-    public static final int BufferDepth   = 10; 
+    public static final int BufferDepth   = 10;
+    public static final char [] AcFunc    = {'l', 't', 't', 'l'};
+
+/*
     public static final int  [] LayerSize = {128, 64, 32, 8};
     public static final int  [] NumBlocks = { 32,  8,  8, 4};
-    public static final char [] AcFunc    = {'l', 't', 't', 'l'};
+*/
+    public static final int  [] LayerSize = { 32, 64, 64, 8};
+    public static final int  [] NumBlocks = {  4,  4,  4, 4};
 
 
     ///////////////////////// FPGA Settings /////////////////////////
