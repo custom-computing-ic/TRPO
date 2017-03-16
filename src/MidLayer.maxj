@@ -9,6 +9,8 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Stream.OffsetExpr;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Accumulator;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
@@ -36,7 +38,7 @@ import maxpower.TreeReduce;
  * @param <PrevLayer> y values of previous layer, width should be NumInBlocks.
  *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
  *                    Note: during initialisation, PrevLayer is used to stream in W and VW.
- * @param <PrevRyLayer> Ry values of previous layer, width should be NumInBlocks
+ * @param <FwdPrevRyLayer> Ry values of previous layer, width should be NumInBlocks
  *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
  * @param <BiasInitData> Initialisation Data for Bias and VBias
  * @param <beginInit> begin Initialisation - using PrevLayer to stream in W and VW
@@ -49,15 +51,26 @@ class MidLayer extends KernelLib{
 
     private DFEVector<DFEVar> YVec;
     private DFEVector<DFEVar> RyVec;
-    private DFEVar InputReadOffsetAddr;
-    private DFEVar FirstItemReady;
-    private DFEVar Valid;
+    private DFEVector<DFEVar> RGVec;
+    private DFEVar FwdInputReadOffsetAddr;
+    private DFEVar FwdFirstItemReady;
+    private DFEVar FwdValid;
+    private DFEVar BwdNextLayerReadOffsetAddr;
+    private DFEVar BwdPrevLayerReadOffsetAddr;
+    private DFEVar BwdFirstItemReady;
+    private DFEVar BwdValid;
 		
-    public DFEVector<DFEVar> getY()             {return YVec;}
-    public DFEVector<DFEVar> getRy()            {return RyVec;}
-    public DFEVar getInputReadOffsetAddr()      {return InputReadOffsetAddr;}
-    public DFEVar isFirstItemReady()            {return FirstItemReady;}
-    public DFEVar isValid()                     {return Valid;}
+    public DFEVector<DFEVar> getY()                     {return YVec;}
+    public DFEVector<DFEVar> getRy()                    {return RyVec;}
+    public DFEVector<DFEVar> getRG()                    {return RGVec;}
+    public DFEVar getFwdInputReadOffsetAddr()           {return FwdInputReadOffsetAddr;}
+    public DFEVar isFwdFirstItemReady()                 {return FwdFirstItemReady;}
+    public DFEVar isFwdValid()                          {return FwdValid;}
+    public DFEVar getBwdNextLayerReadOffsetAddr()       {return BwdNextLayerReadOffsetAddr;}
+    public DFEVar getBwdPrevLayerReadOffsetAddr()       {return BwdPrevLayerReadOffsetAddr;}
+    public DFEVar isBwdFirstItemReady()                 {return BwdFirstItemReady;}
+    public DFEVar isBwdValid()                          {return BwdValid;}
+
 	
     MidLayer(   KernelLib owner,
                 int ID,
@@ -67,12 +80,16 @@ class MidLayer extends KernelLib{
                 int OutBlockDim,
                 int NumOutBlocks,
                 int OutBlockDimCycleTime,
-                DFEVector<DFEVar> PrevLayer,
-                DFEVector<DFEVar> PrevRyLayer,
+                DFEVector<DFEVar> FwdPrevLayer,
+                DFEVector<DFEVar> BwdPrevLayer,
+                DFEVector<DFEVar> FwdPrevRyLayer,
+                DFEVector<DFEVar> BwdNextLayer,
+                DFEVector<DFEVar> BwdNextRGLayer,                
                 DFEVar BiasInitData,
                 DFEVar beginWeightInit,
                 DFEVar beginBiasInit,
-                DFEVar beginFwdProp
+                DFEVar beginFwdProp,
+                DFEVar beginBwdProp
             )
     {
 
@@ -80,11 +97,19 @@ class MidLayer extends KernelLib{
     
     /////////////////////// Data Types ///////////////////////
     
+    int BlockSize = InBlockDim*OutBlockDim;
     DFEVectorType<DFEVar>  InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
     DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
-    DFEVectorType<DFEVector<DFEVar>> GridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
-    int BlockSize = InBlockDim*OutBlockDim;
+    DFEVectorType<DFEVector<DFEVar>> FwdGridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
+    DFEVectorType<DFEVector<DFEVar>> BwdGridVecType = new DFEVectorType<DFEVector<DFEVar>>(OutVecType, NumInBlocks);
     DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
+
+
+
+    /*************************************************************************************
+    *                             Control - Initialisation                               *
+    *************************************************************************************/
+
 
 
     /////////////////////// Address Generation - Weight Initialisation ///////////////////////
@@ -110,24 +135,24 @@ class MidLayer extends KernelLib{
     DFEVar isInitW   = isInit & (InitCount <  NumOutBlocks*BlockSize);
     DFEVar isInitVW  = isInit & (InitCount >= NumOutBlocks*BlockSize);
     
-    // WPortAddr - Initialisation using R/W port
-    Count.Params WPortAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockSize))
+    // InitWPortAddr - Initialisation using R/W port
+    Count.Params InitWPortAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockSize))
                                                   .withInitValue(0)
                                                   .withMax(BlockSize)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
                                                   .withReset(WeightInitReset);
-    Counter WPortAddrCounter = control.count.makeCounter(WPortAddrCounterParam);
-    DFEVar WPortAddr = WPortAddrCounter.getCount();
+    Counter InitWPortAddrCounter = control.count.makeCounter(InitWPortAddrCounterParam);
+    DFEVar InitWPortAddr = InitWPortAddrCounter.getCount();
 
-    // YCount - to Select the block to write according to Y
-    Count.Params YCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
+    // InitWYCount - to Select the block to write according to Y
+    Count.Params InitWYCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
                                                   .withInitValue(0)
                                                   .withMax(NumOutBlocks)
-                                                  .withEnable(WPortAddrCounter.getWrap())
+                                                  .withEnable(InitWPortAddrCounter.getWrap())
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
                                                   .withReset(WeightInitReset);
-    Counter YCounter = control.count.makeCounter(YCounterParam);
-    DFEVar YCount = YCounter.getCount();
+    Counter InitWYCounter = control.count.makeCounter(InitWYCounterParam);
+    DFEVar InitWYCount = InitWYCounter.getCount();
 
 
     /////////////////////// Address Generation - Bias Initialisation ///////////////////////
@@ -142,79 +167,172 @@ class MidLayer extends KernelLib{
     DFEVar isInitB       = isBiasInit & (BiasInitCount <  NumOutBlocks*OutBlockDim);
     DFEVar isInitVB      = isBiasInit & (BiasInitCount >= NumOutBlocks*OutBlockDim);
     
-    // BPortAddr - Initialisation using R/W port
-    Count.Params BPortAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
+    // InitBPortAddr - Initialisation using R/W port
+    Count.Params InitBPortAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
                                                   .withInitValue(0)
                                                   .withMax(OutBlockDim)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
                                                   .withReset(BiasInitReset);
-    Counter BPortAddrCounter = control.count.makeCounter(BPortAddrCounterParam);
-    DFEVar BPortAddr = BPortAddrCounter.getCount();
+    Counter InitBPortAddrCounter = control.count.makeCounter(InitBPortAddrCounterParam);
+    DFEVar InitBPortAddr = InitBPortAddrCounter.getCount();
 
     // BYCount - to Select the block to write according to Y
-    Count.Params BYCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
+    Count.Params InitBYCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
                                                   .withInitValue(0)
                                                   .withMax(NumOutBlocks)
-                                                  .withEnable(BPortAddrCounter.getWrap())
+                                                  .withEnable(InitBPortAddrCounter.getWrap())
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
                                                   .withReset(BiasInitReset);
-    Counter BYCounter = control.count.makeCounter(BYCounterParam);
-    DFEVar BYCount = BYCounter.getCount();
+    Counter InitBYCounter = control.count.makeCounter(InitBYCounterParam);
+    DFEVar InitBYCount = InitBYCounter.getCount();
+
+
+
+    /*************************************************************************************
+    *                            Control - Forward Propagation                           *
+    *************************************************************************************/
+
 
 
     /////////////////////// Address Generation - Forward Propagation ///////////////////////
 
+    // Counter Reset
+    DFEVar FwdReset = beginFwdProp;
+
     // Top Level Control
-    AddrGenerator CompCounter = new AddrGenerator(owner, 1, OutBlockDimCycleTime*InBlockDim, beginFwdProp);
-    DFEVar isCalculating = CompCounter.isValid();
+    AddrGenerator FwdCounter = new AddrGenerator(owner, 1, OutBlockDimCycleTime*InBlockDim, FwdReset);
+    DFEVar isFwdCalculating = FwdCounter.isValid();
+    
+    // Begin New Row
     Count.Params NewRowCounterParam = control.count.makeParams(16)
                                                    .withInitValue(0)
                                                    .withMax(OutBlockDimCycleTime)
                                                    .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                   .withReset(beginFwdProp);
+                                                   .withReset(FwdReset);
     Counter NewRowCounter = control.count.makeCounter(NewRowCounterParam);
-    DFEVar beginNewRow = (NewRowCounter.getCount() === 0) & isCalculating;
+    DFEVar beginNewRow = (NewRowCounter.getCount() === 0) & isFwdCalculating;
 
     // Col Address in OutBlockDim domain - to be used by Weight, Bias and Temp Result
-    DFEVar ColAddrCounterReset = beginNewRow;
-    AddrGenerator ColAddrCounter = new AddrGenerator(owner, 1, OutBlockDim, ColAddrCounterReset);
-    DFEVar ColAddr = ColAddrCounter.getAddr();
-    DFEVar ColAddrValid = ColAddrCounter.isValid() & isCalculating;
+    AddrGenerator FwdColAddrCounter = new AddrGenerator(owner, 1, OutBlockDim, beginNewRow);
+    DFEVar FwdColAddr = FwdColAddrCounter.getAddr();
+    DFEVar FwdColAddrValid = FwdColAddrCounter.isValid() & isFwdCalculating;
 
     // Row Address in InBlockDim domain - to be used by Weight
-    DFEVar RowAddrCounterReset = beginFwdProp;
-    DFEVar IncRowAddrNextTick = NewRowCounter.getWrap();
-    AddrGenerator RowAddrCounter = new AddrGenerator(owner, 1, InBlockDim, RowAddrCounterReset, IncRowAddrNextTick);
-    DFEVar RowAddr = RowAddrCounter.getAddr();
-    DFEVar isFirstRow = (RowAddr === 0);
+    DFEVar FwdIncRowAddrNextTick = NewRowCounter.getWrap();
+    AddrGenerator FwdRowAddrCounter = new AddrGenerator(owner, 1, InBlockDim, FwdReset, FwdIncRowAddrNextTick);
+    DFEVar FwdRowAddr = FwdRowAddrCounter.getAddr();
+    DFEVar isFirstRow = (FwdRowAddr === 0);
 
     // Weight Read Address
-    DFEVar WReadAddr = RowAddr.cast(AddrType) * OutBlockDim + ColAddr.cast(AddrType);
+    DFEVar FwdWReadAddr = FwdRowAddr.cast(AddrType) * OutBlockDim + FwdColAddr.cast(AddrType);
     
     // Offset Read Address for the Input Vector - for previous LayerBuffer
-    InputReadOffsetAddr = RowAddr;
+    FwdInputReadOffsetAddr = FwdRowAddr;
 
     // The first item of the result is ready at the beginning of the last iteration
-    FirstItemReady = (RowAddr === InBlockDim-1) & beginNewRow & isCalculating;
+    FwdFirstItemReady = (FwdRowAddr === InBlockDim-1) & beginNewRow & isFwdCalculating;
 
-    // Is Output Valid
-    Valid = (RowAddr === InBlockDim-1) & ColAddrValid;
+    // Is Fwd Output Valid
+    FwdValid = (FwdRowAddr === InBlockDim-1) & FwdColAddrValid;
+
+
+
+    /*************************************************************************************
+    *                             Control - Back Propagation                             *
+    *************************************************************************************/
+
+
+
+    /////////////////////// Address Generation - Back Propagation ///////////////////////
+
+    // Counter Reset
+    DFEVar BwdReset = beginBwdProp;
+
+    // Top Level Control
+    AddrGenerator BwdCounter = new AddrGenerator(owner, 1, BlockSize, BwdReset);
+    DFEVar BwdCount = BwdCounter.getAddr();
+    DFEVar isBwdCalculating = BwdCounter.isValid();
+
+    // Col Address in OutBlockDim domain - to be used by Weight, Bias and Temp Result
+    Count.Params BwdColAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
+                                                  .withInitValue(0)
+                                                  .withMax(OutBlockDim)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(BwdReset);
+    Counter BwdColAddrCounter = control.count.makeCounter(BwdColAddrCounterParam);
+    DFEVar BwdColAddr = BwdColAddrCounter.getCount();
+
+    // Row Address in InBlockDim domain - to be used by Weight, Bias and Temp Result
+    Count.Params BwdRowAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(InBlockDim))
+                                                  .withInitValue(0)
+                                                  .withMax(InBlockDim)
+                                                  .withEnable(BwdColAddrCounter.getWrap())
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(BwdReset);
+    Counter BwdRowAddrCounter = control.count.makeCounter(BwdRowAddrCounterParam);
+    DFEVar BwdRowAddr = BwdRowAddrCounter.getCount();
+
+    // Read Address - horizontal in our case
+    DFEVar BwdWReadAddr = BwdRowAddr.cast(AddrType) * OutBlockDim + BwdColAddr.cast(AddrType);
+
+    // Offset Read Address for the BwdNextLayer Vector
+    BwdNextLayerReadOffsetAddr = BwdColAddr;
+    
+    // Offset Read Address for the BwdPrevLayer Vector
+    BwdPrevLayerReadOffsetAddr = BwdRowAddr;
+    
+    // The first item of the result is ready at the end of the first iteration
+    BwdFirstItemReady = isBwdCalculating & BwdColAddrCounter.getWrap() & (BwdRowAddr === 0);
+    
+    // The result is valid on the last cycle of each inner loop iteration
+    BwdValid = isBwdCalculating & BwdColAddrCounter.getWrap();
+
+    // RGW Update is valid during Back Propagation
+    DFEVar isRGWUpdating = isBwdCalculating;
+
+    // RGB Update is valid on the first inner loop
+    DFEVar isRGBUpdating = isBwdCalculating & (BwdCount < OutBlockDim);
+
+
+
+    /*************************************************************************************
+    *                                  Overall Control                                   *
+    *************************************************************************************/
+
+
+
+    DFEVar WPortAddr = isInit ? InitWPortAddr : BwdWReadAddr;
+    DFEVar WReadAddr = FwdWReadAddr;
+    DFEVar BPortAddr = InitBPortAddr;
+    DFEVar BReadAddr = FwdColAddr;
+    
+    DFEVar RGWReadAddr = BwdWReadAddr;
+    DFEVar RGBReadAddr = BwdColAddr;
+
+
+
+    /*************************************************************************************
+    *                                 Memory Allocation                                  *
+    *************************************************************************************/
+
+
 
     /////////////////////// Memory Allocation ///////////////////////
 
     // Weight and VWeight Memory Blocks
-    DFEVector<DFEVector<DFEVar>>  WGridVec = GridVecType.newInstance(this);
-    DFEVector<DFEVector<DFEVar>> VWGridVec = GridVecType.newInstance(this);
+    DFEVector<DFEVector<DFEVar>>  FwdWGridVec = FwdGridVecType.newInstance(this);
+    DFEVector<DFEVector<DFEVar>>  BwdWGridVec = BwdGridVecType.newInstance(this);
+    DFEVector<DFEVector<DFEVar>> FwdVWGridVec = FwdGridVecType.newInstance(this);
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // W Block
             Memory<DFEVar> WBlock = mem.alloc(Def.DataType, BlockSize);
-            WBlock.port(WPortAddr, PrevLayer[X], isInitW & (Y===YCount), RamWriteMode.WRITE_FIRST);
-            WGridVec[Y][X] <== WBlock.read(WReadAddr);
+            BwdWGridVec[X][Y] <== WBlock.port(WPortAddr, FwdPrevLayer[X], isInitW & (Y===InitWYCount), RamWriteMode.WRITE_FIRST);
+            FwdWGridVec[Y][X] <== WBlock.read(WReadAddr);
             // VW Block
             Memory<DFEVar> VWBlock = mem.alloc(Def.DataType, BlockSize);
-            VWBlock.port(WPortAddr, PrevLayer[X], isInitVW & (Y===YCount), RamWriteMode.WRITE_FIRST);
-            VWGridVec[Y][X] <== VWBlock.read(WReadAddr);
+            VWBlock.port(WPortAddr, FwdPrevLayer[X], isInitVW & (Y===InitWYCount), RamWriteMode.WRITE_FIRST);
+            FwdVWGridVec[Y][X] <== VWBlock.read(WReadAddr);
         }
     }
 
@@ -224,16 +342,49 @@ class MidLayer extends KernelLib{
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // B Block
         Memory<DFEVar> BBlock = mem.alloc(Def.DataType, OutBlockDim);
-        BBlock.port(BPortAddr, BiasInitData, isInitB & (Y===BYCount), RamWriteMode.WRITE_FIRST);
-        Bias[Y] <== BBlock.read(ColAddr);
+        BBlock.port(BPortAddr, BiasInitData, isInitB & (Y===InitBYCount), RamWriteMode.WRITE_FIRST);
+        Bias[Y] <== BBlock.read(BReadAddr);
         // VB Block
         Memory<DFEVar> VBBlock = mem.alloc(Def.DataType, OutBlockDim);
-        VBBlock.port(BPortAddr, BiasInitData, isInitVB & (Y===BYCount), RamWriteMode.WRITE_FIRST);
-        VBias[Y] <== VBBlock.read(ColAddr);
+        VBBlock.port(BPortAddr, BiasInitData, isInitVB & (Y===InitBYCount), RamWriteMode.WRITE_FIRST);
+        VBias[Y] <== VBBlock.read(BReadAddr);
+    }
+
+    // RGW Memory Blocks
+    DFEVector<DFEVector<DFEVar>> BwdRGWRdGridVec = BwdGridVecType.newInstance(this);
+    DFEVector<DFEVector<DFEVar>> BwdRGWWrGridVec = BwdGridVecType.newInstance(this);
+    DFEVar BwdRGWWrAddr = dfeUInt(MathUtils.bitsToAddress(BlockSize)).newInstance(this);
+    DFEVar BwdRGWWrEn   = dfeUInt(1).newInstance(this);
+    for (int X=0; X<NumInBlocks; ++X) {
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            // RGW Block
+            Memory<DFEVar> RGWBlock = mem.alloc(Def.DataType, BlockSize);
+            RGWBlock.port(BwdRGWWrAddr, BwdRGWWrGridVec[X][Y], BwdRGWWrEn, RamWriteMode.WRITE_FIRST);
+            BwdRGWRdGridVec[X][Y] <== RGWBlock.read(RGWReadAddr);
+        }
+    }
+    
+    // RGB Memory Blocks
+    DFEVector<DFEVar> BwdRGBRead  = OutVecType.newInstance(this);
+    DFEVector<DFEVar> BwdRGBWrite = OutVecType.newInstance(this);
+    DFEVar BwdRGBWrAddr = dfeUInt(MathUtils.bitsToAddress(OutBlockDim)).newInstance(this);
+    DFEVar BwdRGBWrEn   = dfeUInt(1).newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        // RGB Block
+        Memory<DFEVar> RGBBlock = mem.alloc(Def.DataType, OutBlockDim);
+        RGBBlock.port(BwdRGBWrAddr, BwdRGBWrite[Y], BwdRGBWrEn, RamWriteMode.WRITE_FIRST);
+        BwdRGBRead[Y] <== RGBBlock.read(RGBReadAddr);
     }
 
 
-    /////////////////////// Calculation ///////////////////////
+
+    /*************************************************************************************
+    *                                    Calculation                                     *
+    *************************************************************************************/
+
+
+
+    /////////////////////// Calculation - Forward Propagation ///////////////////////
 
     // Calculate Pre-activated Y and Ry
     // TODO: Optimise bit width to avoid overflow
@@ -242,8 +393,8 @@ class MidLayer extends KernelLib{
     DFEVector<DFEVar> NewPreAc_y  = OutVecType.newInstance(this);
     DFEVector<DFEVar> NewPreAc_Ry = OutVecType.newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
-        DFEVector<DFEVar> mult_y  =   PrevLayer * WGridVec[Y];
-        DFEVector<DFEVar> mult_Ry = PrevRyLayer * WGridVec[Y] + PrevLayer * VWGridVec[Y];
+        DFEVector<DFEVar> mult_y  =   FwdPrevLayer * FwdWGridVec[Y];
+        DFEVector<DFEVar> mult_Ry = FwdPrevRyLayer * FwdWGridVec[Y] + FwdPrevLayer * FwdVWGridVec[Y];
         DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(), mult_y.getElementsAsList());
         DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry.getElementsAsList());
         NewPreAc_y[Y]  <== MultAdd_y  + (isFirstRow ?  Bias[Y] : Temp_y[Y]);
@@ -260,21 +411,21 @@ class MidLayer extends KernelLib{
         TempWrData_y[Y]  <== stream.offset(NewPreAc_y[Y],  -Offset_y);
         TempWrData_Ry[Y] <== stream.offset(NewPreAc_Ry[Y], -Offset_Ry);
     }
-    DFEVar TempWrAddr_y  = stream.offset(ColAddr, -Offset_y);
-    DFEVar TempWrAddr_Ry = stream.offset(ColAddr, -Offset_Ry);
-    DFEVar TempWrEn_y    = stream.offset(ColAddrValid, -Offset_y);
-    DFEVar TempWrEn_Ry   = stream.offset(ColAddrValid, -Offset_Ry);
+    DFEVar TempWrAddr_y  = stream.offset(FwdColAddr, -Offset_y);
+    DFEVar TempWrAddr_Ry = stream.offset(FwdColAddr, -Offset_Ry);
+    DFEVar TempWrEn_y    = stream.offset(FwdColAddrValid, -Offset_y);
+    DFEVar TempWrEn_Ry   = stream.offset(FwdColAddrValid, -Offset_Ry);
 
 
     // Temp Result of y and Ry
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // Temp y
         Memory<DFEVar> BRAM_y = mem.alloc(Def.DataType, OutBlockDim);
-        Temp_y[Y] <== BRAM_y.read(ColAddr);
+        Temp_y[Y] <== BRAM_y.read(FwdColAddr);
         BRAM_y.port(TempWrAddr_y, TempWrData_y[Y], TempWrEn_y, RamWriteMode.WRITE_FIRST);
         // Temp Ry
         Memory<DFEVar> BRAM_Ry = mem.alloc(Def.DataType, OutBlockDim);
-        Temp_Ry[Y] <== BRAM_Ry.read(ColAddr);
+        Temp_Ry[Y] <== BRAM_Ry.read(FwdColAddr);
         BRAM_Ry.port(TempWrAddr_Ry, TempWrData_Ry[Y], TempWrEn_Ry, RamWriteMode.WRITE_FIRST);
     }
 
@@ -305,13 +456,73 @@ class MidLayer extends KernelLib{
     // For Simulation
     debug.simPrintf(WeightInitReset, "[%4d] Layer[%d] Begin Init Weights...\n", control.count.simpleCounter(32), ID);
     debug.simPrintf(BiasInitReset, "[%4d] Layer[%d] Begin Init Bias...\n", control.count.simpleCounter(32), ID);
-    debug.simPrintf(Valid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WReadAddr, ColAddr, YVec[0], YVec[1], YVec[2], YVec[3], ColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], Valid);
+    debug.simPrintf(FwdValid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, WReadAddr, FwdColAddr, YVec[0], YVec[1], YVec[2], YVec[3], FwdColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], FwdValid);
 */
 
 /*
     // For jUnit Tests
-    debug.simPrintf(ColAddrValid, "[%3d] W[%d][%d]=[%.2f, %.2f, %.2f, %.2f], IN=[%.2f, %.2f, %.2f, %.2f], Bias[%d]=%.2f, Temp[%d]=>%2.6f | PreAc_y[0]=%2.6f => y_0=%f, Valid=%d\n", control.count.simpleCounter(32), RowAddr, ColAddr, WGridVec[0][0], WGridVec[0][1], WGridVec[0][2], WGridVec[0][3], PrevLayer[0], PrevLayer[1], PrevLayer[2], PrevLayer[3], ColAddr, Bias[0], ColAddr, Temp_y[0], NewPreAc_y[0], YVec[0], Valid);
+    debug.simPrintf(FwdColAddrValid, "[%3d] W[%d][%d]=[%.2f, %.2f, %.2f, %.2f], IN=[%.2f, %.2f, %.2f, %.2f], Bias[%d]=%.2f, Temp[%d]=>%2.6f | PreAc_y[0]=%2.6f => y_0=%f, Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, FwdWGridVec[0][0], FwdWGridVec[0][1], FwdWGridVec[0][2], FwdWGridVec[0][3], FwdPrevLayer[0], FwdPrevLayer[1], FwdPrevLayer[2], FwdPrevLayer[3], FwdColAddr, Bias[0], FwdColAddr, Temp_y[0], NewPreAc_y[0], YVec[0], FwdValid);
 */
+
+
+
+    /////////////////////// Calculation - Backward Propagation ///////////////////////
+
+    // Accumulator Parameter
+    Accumulator.Params BwdAccParam = Reductions.accumulator.makeAccumulatorConfig(Def.DataType)
+                                                     .withEnable(isBwdCalculating)
+                                                     .withClear(stream.offset(BwdColAddr, 1)===0);
+
+    // De-Activation
+    DFEVector<DFEVar> RGLayer = OutVecType.newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        switch (AcFunc) {
+            case 't': {RGLayer[Y] <== BwdNextRGLayer[Y] * (1-BwdNextLayer[Y]*BwdNextLayer[Y]); break;}
+            case 'l': {RGLayer[Y] <== BwdNextRGLayer[Y]; break;}
+            default: {throw new IllegalArgumentException("Layer["+ID+"]: Activation Function "+AcFunc+" unsupported.");}    
+        }
+    }
+
+    // Calculate RGVec when this layer isn't first layer
+    // TODO: Optimise bit width to avoid overflow
+    RGVec = InVecType.newInstance(this);
+    if (ID==0) {
+        for (int X=0; X<NumInBlocks; ++X) RGVec[X] <== constant.var(Def.DataType, 0);
+    }
+    else {
+        for (int X=0; X<NumInBlocks; ++X) {
+            DFEVector<DFEVar> mult_RG = RGLayer * BwdRGWRdGridVec[X];
+            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG.getElementsAsList());
+            DFEVar sum_RG = Reductions.accumulator.makeAccumulator(toAccumulator_RG, BwdAccParam);
+            RGVec[X] <== sum_RG;
+        }
+    }
+    
+    // Calculate RGW
+    // TODO: Optimise bit width to avoid overflow
+    OffsetExpr Offset_RGW = stream.makeOffsetAutoLoop("Layer"+ID+"Offset_RGW");
+    for (int X=0; X<NumInBlocks; ++X) {
+        for (int Y=0; Y<NumOutBlocks; ++Y) {
+            DFEVar NewRGW = BwdRGWRdGridVec[X][Y] + BwdPrevLayer[X] * RGLayer[Y];
+            BwdRGWWrGridVec[X][Y] <== isInitW ? constant.var(Def.DataType, 0) : stream.offset(NewRGW, -Offset_RGW);
+        }
+    }
+    BwdRGWWrAddr <== isInitW ? InitWPortAddr : stream.offset(RGWReadAddr, -Offset_RGW);
+    BwdRGWWrEn   <== isInitW | stream.offset(isRGWUpdating, -Offset_RGW);
+
+
+
+    // Calculate RGB
+    OffsetExpr Offset_RGB = stream.makeOffsetAutoLoop("Layer"+ID+"Offset_RGB");
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        DFEVar NewRGB = BwdRGBRead[Y] + RGLayer[Y];
+        BwdRGBWrite[Y] <== isInitB ? constant.var(Def.DataType, 0) : stream.offset(NewRGB, -Offset_RGB);
+    }
+    BwdRGBWrAddr <== isInitB ? InitBPortAddr : stream.offset(BwdColAddr, -Offset_RGB);
+    BwdRGBWrEn   <== isInitB | stream.offset(isRGBUpdating, -Offset_RGB);
+
+
+
 	}
 
     /////////////////////// Activation Functions ///////////////////////
