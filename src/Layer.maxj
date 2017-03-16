@@ -29,6 +29,13 @@ import maxpower.TreeReduce;
  * @param <NumInBlocks> Number of Input Blocks => InputDim = InBlockDim * NumInBlocks
  * @param <OutBlockDim> Block Dimension of the Output Vector
  * @param <NumOutBlocks> Number of Output Blocks => OutputDim = OutBlockDim * NumOutBlocks
+ * @param <InBlockDimCycleTime> Number of cycles needed for each inner loop, see description below
+ *                               Note: a) A new vector comes every InputLatency cycles.
+ *                                     b) In each inner loop there are InBlockDim items to process.
+ *                                     c) The computation latency within this block is CompLatency cycles.
+ *                                        This can be checked with stream offset value
+ *                                     ==> OutBlockDimCycleTime = max(InputLatency, InBlockDim, CompLatency)
+ *                                     TotalNumCycles = OutBlockDimCycleTime * OutBlockDim 
  * @param <FwdPrevLayer> y values of previous layer, width should be NumInBlocks.
  *                       Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
  *                       Note: during initialisation, FwdPrevLayer is used to stream in W and VW.
@@ -80,6 +87,7 @@ class Layer extends KernelLib{
             int NumInBlocks,
             int OutBlockDim,
             int NumOutBlocks,
+            int InBlockDimCycleTime,
             DFEVector<DFEVar> FwdPrevLayer,
             DFEVector<DFEVar> BwdPrevLayer,
             DFEVector<DFEVar> FwdPrevRyLayer,
@@ -144,7 +152,7 @@ class Layer extends KernelLib{
     Counter InitWPortAddrCounter = control.count.makeCounter(InitWPortAddrCounterParam);
     DFEVar InitWPortAddr = InitWPortAddrCounter.getCount();
 
-    // YCount - to Select the block to write according to Y
+    // InitWYCount - to Select the block to write according to Y
     Count.Params InitWYCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
                                                   .withInitValue(0)
                                                   .withMax(NumOutBlocks)
@@ -248,49 +256,50 @@ class Layer extends KernelLib{
     DFEVar BwdReset = beginBwdProp;
 
     // Top Level Control
-    AddrGenerator BwdCounter = new AddrGenerator(owner, 1, BlockSize, BwdReset);
+    AddrGenerator BwdCounter = new AddrGenerator(owner, 1, InBlockDimCycleTime*OutBlockDim, BwdReset);
     DFEVar BwdCount = BwdCounter.getAddr();
     DFEVar isBwdCalculating = BwdCounter.isValid();
+    
+    // Begin New Column
+    Count.Params NewColCounterParam = control.count.makeParams(16)
+                                                   .withInitValue(0)
+                                                   .withMax(InBlockDimCycleTime)
+                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                   .withReset(BwdReset);
+    Counter NewColCounter = control.count.makeCounter(NewColCounterParam);
+    DFEVar beginNewCol = (NewColCounter.getCount() === 0) & isBwdCalculating;
 
-    // Col Address in OutBlockDim domain - to be used by Weight, Bias and Temp Result
-    Count.Params BwdColAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
-                                                  .withInitValue(0)
-                                                  .withMax(OutBlockDim)
-                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                  .withReset(BwdReset);
-    Counter BwdColAddrCounter = control.count.makeCounter(BwdColAddrCounterParam);
-    DFEVar BwdColAddr = BwdColAddrCounter.getCount();
+    // Row Address in InBlockDim domain - to be used by Weight and Temp Result
+    AddrGenerator BwdRowAddrCounter = new AddrGenerator(owner, 1, InBlockDim, beginNewCol);
+    DFEVar BwdRowAddr = BwdRowAddrCounter.getAddr();
+    DFEVar BwdRowAddrValid = BwdRowAddrCounter.isValid() & isBwdCalculating;
 
-    // Row Address in InBlockDim domain - to be used by Weight, Bias and Temp Result
-    Count.Params BwdRowAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(InBlockDim))
-                                                  .withInitValue(0)
-                                                  .withMax(InBlockDim)
-                                                  .withEnable(BwdColAddrCounter.getWrap())
-                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                  .withReset(BwdReset);
-    Counter BwdRowAddrCounter = control.count.makeCounter(BwdRowAddrCounterParam);
-    DFEVar BwdRowAddr = BwdRowAddrCounter.getCount();
+    // Col Address in OutBlockDim domain - to be used by Weight
+    DFEVar BwdIncColAddrNextTick = NewColCounter.getWrap();
+    AddrGenerator BwdColAddrCounter = new AddrGenerator(owner, 1, OutBlockDim, BwdReset, BwdIncColAddrNextTick);
+    DFEVar BwdColAddr = BwdColAddrCounter.getAddr();
+    DFEVar isFirstCol = (BwdColAddr === 0);
 
-    // Read Address - horizontal in our case
+    // Weight Read Address
     DFEVar BwdWReadAddr = BwdRowAddr.cast(AddrType) * OutBlockDim + BwdColAddr.cast(AddrType);
-
+    
     // Offset Read Address for the BwdNextLayer Vector
     BwdNextLayerReadOffsetAddr = BwdColAddr;
     
     // Offset Read Address for the BwdPrevLayer Vector
-    BwdPrevLayerReadOffsetAddr = BwdRowAddr;
-    
-    // The first item of the result is ready at the end of the first iteration
-    BwdFirstItemReady = isBwdCalculating & BwdColAddrCounter.getWrap() & (BwdRowAddr === 0);
-    
-    // The result is valid on the last cycle of each inner loop iteration
-    BwdValid = isBwdCalculating & BwdColAddrCounter.getWrap();
+    BwdPrevLayerReadOffsetAddr = BwdRowAddr;    
+
+    // The first item of the result is ready at the beginning of the last iteration
+    BwdFirstItemReady = (BwdColAddr === OutBlockDim-1) & beginNewCol & isBwdCalculating;
+
+    // Is Fwd Output Valid
+    BwdValid = (BwdColAddr === OutBlockDim-1) & BwdRowAddrValid;
 
     // RGW Update is valid during Back Propagation
     DFEVar isRGWUpdating = isBwdCalculating;
 
-    // RGB Update is valid on the first inner loop
-    DFEVar isRGBUpdating = isBwdCalculating & (BwdCount < OutBlockDim);
+    // RGB Update is valid on the first cycle in each inner loop
+    DFEVar isRGBUpdating = isBwdCalculating & beginNewCol;
 
 
 
@@ -307,6 +316,7 @@ class Layer extends KernelLib{
     
     DFEVar RGWReadAddr = BwdWReadAddr;
     DFEVar RGBReadAddr = BwdColAddr;
+
 
 
     /*************************************************************************************
@@ -450,14 +460,9 @@ class Layer extends KernelLib{
     debug.simPrintf(FwdValid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, WReadAddr, FwdColAddr, YVec[0], YVec[1], YVec[2], YVec[3], FwdColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], FwdValid);
 
 
-    
 
     /////////////////////// Calculation - Backward Propagation ///////////////////////
 
-    // Accumulator Parameter
-    Accumulator.Params BwdAccParam = Reductions.accumulator.makeAccumulatorConfig(Def.DataType)
-                                                     .withEnable(isBwdCalculating)
-                                                     .withClear(stream.offset(BwdColAddr, 1)===0);
 
     // De-Activation
     DFEVector<DFEVar> RGLayer = OutVecType.newInstance(this);
@@ -476,12 +481,36 @@ class Layer extends KernelLib{
         for (int X=0; X<NumInBlocks; ++X) RGVec[X] <== constant.var(Def.DataType, 0);
     }
     else {
+    
+        // TODO: Optimise bit width to avoid overflow
+        DFEVector<DFEVar> Temp_RG = InVecType.newInstance(this);
+        DFEVector<DFEVar> New_RG  = InVecType.newInstance(this);
         for (int X=0; X<NumInBlocks; ++X) {
             DFEVector<DFEVar> mult_RG = RGLayer * BwdRGWRdGridVec[X];
-            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG.getElementsAsList());
-            DFEVar sum_RG = Reductions.accumulator.makeAccumulator(toAccumulator_RG, BwdAccParam);
-            RGVec[X] <== sum_RG;
+            DFEVar MultAdd_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG.getElementsAsList());
+            New_RG[X] <== isFirstCol ? MultAdd_RG : MultAdd_RG + Temp_RG[X];
+        }    
+
+        // Prepare Write Back Data
+        OffsetExpr Offset_RG = stream.makeOffsetAutoLoop("Layer"+ID+"Offset_RG");
+        DFEVector<DFEVar> TempWrData_RG = InVecType.newInstance(this);
+        for (int X=0; X<NumInBlocks; ++X) {
+            TempWrData_RG[X] <== stream.offset(New_RG[X], -Offset_RG);
         }
+        DFEVar TempWrAddr_RG = stream.offset(BwdRowAddr, -Offset_RG);
+        DFEVar TempWrEn_RG   = stream.offset(BwdRowAddrValid, -Offset_RG);
+
+        // Temp Result of RG
+        for (int X=0; X<NumInBlocks; ++X) {
+            // Temp RG
+            Memory<DFEVar> BRAM_RG = mem.alloc(Def.DataType, InBlockDim);
+            Temp_RG[X] <== BRAM_RG.read(BwdRowAddr);
+            BRAM_RG.port(TempWrAddr_RG, TempWrData_RG[X], TempWrEn_RG, RamWriteMode.WRITE_FIRST);
+        }
+        
+        // Final Result
+        RGVec = New_RG;
+
     }
     
     // Calculate RGW
@@ -496,17 +525,14 @@ class Layer extends KernelLib{
     BwdRGWWrAddr <== isInitW ? InitWPortAddr : stream.offset(RGWReadAddr, -Offset_RGW);
     BwdRGWWrEn   <== isInitW | stream.offset(isRGWUpdating, -Offset_RGW);
 
-
-
     // Calculate RGB
     OffsetExpr Offset_RGB = stream.makeOffsetAutoLoop("Layer"+ID+"Offset_RGB");
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         DFEVar NewRGB = BwdRGBRead[Y] + RGLayer[Y];
         BwdRGBWrite[Y] <== isInitB ? constant.var(Def.DataType, 0) : stream.offset(NewRGB, -Offset_RGB);
     }
-    BwdRGBWrAddr <== isInitB ? InitBPortAddr : stream.offset(BwdColAddr, -Offset_RGB);
-    BwdRGBWrEn   <== isInitB | stream.offset(isRGBUpdating, -Offset_RGB);
-
+    BwdRGBWrAddr <== isInitB ? InitBPortAddr : stream.offset(RGBReadAddr, -Offset_RGB);
+    BwdRGBWrEn   <== isInitB | stream.offset(isRGBUpdating, -Offset_RGB);    
 
 
 	}
