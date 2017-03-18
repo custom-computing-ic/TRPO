@@ -18,7 +18,7 @@ import maxpower.KernelBinaryOp.Add;
 import maxpower.TreeReduce;
 
 /**
- * Middle Forward Propagation Layer
+ * A EVEN layer of both forward propagation and back propagation
  *
  * @author Patrick Shao
  *
@@ -35,15 +35,22 @@ import maxpower.TreeReduce;
  *                                        This can be checked with stream offset value
  *                                     ==> OutBlockDimCycleTime = max(InputLatency, OutBlockDim, CompLatency)
  *                                     TotalNumCycles = OutBlockDimCycleTime * InBlockDim
- * @param <PrevLayer> y values of previous layer, width should be NumInBlocks.
- *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
- *                    Note: during initialisation, PrevLayer is used to stream in W and VW.
+ * @param <FwdPrevLayer> y values of previous layer, width should be NumInBlocks.
+ *                       Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ *                       Note: during initialisation, PrevLayer is used to stream in W and VW.
+ * @param <BwdPrevLayer> y values of previous layer, width should be NumInBlocks.
+ *                       Iterating every outer iteration.
  * @param <FwdPrevRyLayer> Ry values of previous layer, width should be NumInBlocks
- *                    Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ *                         Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
+ * @param <BwdNextLayer> y values from next layer, width should be NumOutBlocks.
+ *                       Iterating every cycle during back propagation.
+ * @param <BwdNextRGLayer> Incoming RGLayer values, width should be NumOutBlocks.
+ *                         Iterating every cycle during back propagation. 
  * @param <BiasInitData> Initialisation Data for Bias and VBias
- * @param <beginInit> begin Initialisation - using PrevLayer to stream in W and VW
+ * @param <beginWeightInit> begin Weight Initialisation - using FwdPrevLayer to stream in W and VW
+ * @param <beginBiasInit> begin Bias Initialisation - using BiasInitData to stream in B and VB
  * @param <beginFwdProp> begin forward propagation
- *
+ * @param <beginBwdProp> begin back propagation
  * 
  */
 
@@ -510,15 +517,13 @@ class MidLayer extends KernelLib{
     BwdRGWWrAddr <== isInitW ? InitWPortAddr : stream.offset(RGWReadAddr, -Offset_RGW);
     BwdRGWWrEn   <== isInitW | stream.offset(isRGWUpdating, -Offset_RGW);
 
-
-
     // Calculate RGB
     OffsetExpr Offset_RGB = stream.makeOffsetAutoLoop("Layer"+ID+"Offset_RGB");
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         DFEVar NewRGB = BwdRGBRead[Y] + RGLayer[Y];
         BwdRGBWrite[Y] <== isInitB ? constant.var(Def.DataType, 0) : stream.offset(NewRGB, -Offset_RGB);
     }
-    BwdRGBWrAddr <== isInitB ? InitBPortAddr : stream.offset(BwdColAddr, -Offset_RGB);
+    BwdRGBWrAddr <== isInitB ? InitBPortAddr : stream.offset(RGBReadAddr, -Offset_RGB);
     BwdRGBWrEn   <== isInitB | stream.offset(isRGBUpdating, -Offset_RGB);
 
 

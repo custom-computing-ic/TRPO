@@ -1360,7 +1360,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     }
 
     // Length of BiasStd Vector
-    size_t BiasStdVecLength = 0;
+    size_t BiasStdVecLength = PaddedLayerSize[NumLayers-1];
     for (size_t i=1; i<NumLayers; ++i) {
         BiasStdVecLength += 2*PaddedLayerSize[i];
     }
@@ -1381,6 +1381,14 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
             else BiasStd[RowNum] = 0;
             RowNum++;
         }
+    }
+    
+    // Feed (1/Std)^2 into BiasStd
+    for (size_t k=0; k<PaddedLayerSize[NumLayers-1]; ++k) {
+        size_t LayerDimLimit = LayerSize[NumLayers-1];
+        if (k<LayerDimLimit) BiasStd[RowNum] = 1.0 / Std[k] / Std[k];
+        else BiasStd[RowNum] = 0;
+        RowNum++;
     }
 
 
