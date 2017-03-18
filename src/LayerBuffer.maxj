@@ -14,7 +14,8 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
 import maxpower.ConstDenominator;
 
 /**
- * A Forward Propagation Layer
+ * Buffer for Forward and Back Propagation.
+ * We Use R/W port for Forward Data Writing and Backward Data Reading, R port for Forward Data Reading
  *
  * @author Patrick Shao
  *
@@ -29,8 +30,10 @@ import maxpower.ConstDenominator;
  * @param <WriteAddrRow> Row Address of Write (which line in the buffer to write to)
  * @param <beginWrFwdData> begin writing one line of Y and Ry for forward propagation - true when first value comes
  * @param <isFwdDataInValid> Are the Y and Ry input data valid on this cycle?
- * @param <ReadAddrRow> Row Address of Read (which line in the buffer to reading from)
- * @param <OffsetReadAddrCol> Column Address of the item to Read within each OutBlockDim
+ * @param <FwdReadAddrRow> Read Row Address for Forward Propagation (which line in the buffer to reading from)
+ * @param <FwdOffsetReadAddrCol> Column Address of the item to Read within each OutBlockDim during Forward Propagation
+ * @param <BwdReadAddrRow> Read Row Address for Backward Propagation (which line in the buffer to reading from)
+ * @param <FwdOffsetReadAddrCol> Column Address of the item to Read within each OutBlockDim during Backward Propagation
  *
  * Remarks: 
  * <1> InBlockDim*NumInBlocks must be equal to OutBlockDim*NumOutBlocks
@@ -42,11 +45,13 @@ import maxpower.ConstDenominator;
 
 class LayerBuffer extends KernelLib{
 
-    private DFEVector<DFEVar> YVec;
+    private DFEVector<DFEVar> FwdYVec;
+    private DFEVector<DFEVar> BwdYVec;
     private DFEVector<DFEVar> RyVec;
     private DFEVar RWCollision;
 
-    public DFEVector<DFEVar> getY()             {return YVec;}
+    public DFEVector<DFEVar> getFwdY()          {return FwdYVec;}
+    public DFEVector<DFEVar> getBwdY()          {return BwdYVec;}
     public DFEVector<DFEVar> getRy()            {return RyVec;}
     public DFEVar isRWCollision()               {return RWCollision;}
 
@@ -62,8 +67,10 @@ class LayerBuffer extends KernelLib{
                     DFEVar WriteAddrRow,
                     DFEVar beginWrFwdData,
                     DFEVar isFwdDataInValid,
-                    DFEVar ReadAddrRow,
-                    DFEVar OffsetReadAddrCol)
+                    DFEVar FwdReadAddrRow,
+                    DFEVar FwdOffsetReadAddrCol,
+                    DFEVar BwdReadAddrRow,
+                    DFEVar BwdOffsetReadAddrCol)
     {
     
     super(owner);
@@ -89,33 +96,43 @@ class LayerBuffer extends KernelLib{
         
         // Parameters
         int NumBlocks = NumInBlocks;
-        int BlockDim = InBlockDim;
+        int BlockDim  = InBlockDim;
         int BlockSize = BlockDim*BufferDepth;
+        int MuxWidth  = NumInBlocks / NumOutBlocks;
         DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
         
-        // Write Address
+        // R/W Port: Write Address during Forward Propagation
         AddrGenerator WrAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginWrFwdData, isFwdDataInValid);
         DFEVar WriteAddrCol = WrAddrColCounter.getAddr();
-        DFEVar WriteAddr = WriteAddrRow.cast(AddrType) * BlockDim + WriteAddrCol.cast(AddrType);
-        DFEVar WriteValid = WrAddrColCounter.isValid() & isFwdDataInValid;
+        DFEVar WriteAddr    = WriteAddrRow.cast(AddrType) * BlockDim + WriteAddrCol.cast(AddrType);
+        DFEVar WriteValid   = WrAddrColCounter.isValid() & isFwdDataInValid;
         
-        // Read Address
-        int MuxWidth = NumInBlocks / NumOutBlocks;
- 		ConstDenominator.ConstDivModResult RdAddrColDivMod = ConstDenominator.divMod(OffsetReadAddrCol, BlockDim);
- 		DFEVar   BaseRdAddrCol = RdAddrColDivMod.getQuotient().cast(dfeUInt(MathUtils.bitsToAddress(MuxWidth)));
- 		DFEVar OffsetRdAddrCol = RdAddrColDivMod.getRemainder().cast(AddrType);
- 		DFEVar ReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + OffsetRdAddrCol;
+        // R/W Port: Read Address during Backward Propagation
+ 		ConstDenominator.ConstDivModResult BwdRdAddrColDivMod = ConstDenominator.divMod(BwdOffsetReadAddrCol, BlockDim);
+ 		DFEVar   BwdBaseRdAddrCol = BwdRdAddrColDivMod.getQuotient().cast(dfeUInt(MathUtils.bitsToAddress(MuxWidth)));
+ 		DFEVar BwdOffsetRdAddrCol = BwdRdAddrColDivMod.getRemainder().cast(AddrType);
+ 		DFEVar BwdReadAddr = BwdReadAddrRow.cast(AddrType) * BlockDim + BwdOffsetRdAddrCol;        
+        
+        // R/W Port: Port Address
+        DFEVar PortAddr = WriteValid ? WriteAddr : BwdReadAddr;
+        
+        // R Port: Read Address during Forward Propagation
+ 		ConstDenominator.ConstDivModResult FwdRdAddrColDivMod = ConstDenominator.divMod(FwdOffsetReadAddrCol, BlockDim);
+ 		DFEVar   FwdBaseRdAddrCol = FwdRdAddrColDivMod.getQuotient().cast(dfeUInt(MathUtils.bitsToAddress(MuxWidth)));
+ 		DFEVar FwdOffsetRdAddrCol = FwdRdAddrColDivMod.getRemainder().cast(AddrType);
+ 		DFEVar ReadAddr = FwdReadAddrRow.cast(AddrType) * BlockDim + FwdOffsetRdAddrCol;
  		RWCollision = (ReadAddr === WriteAddr) & WriteValid;
 
         // Memory Block
         DFEVectorType<DFEVar> ReadVecType = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks);
-        DFEVector<DFEVar> YReadVec = ReadVecType.newInstance(this);
+        DFEVector<DFEVar> FwdYReadVec = ReadVecType.newInstance(this);
+        DFEVector<DFEVar> BwdYReadVec = ReadVecType.newInstance(this);
         DFEVector<DFEVar> RyReadVec = ReadVecType.newInstance(this);
         for (int i=0; i<NumBlocks; ++i) {
             // Y
             Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
-            YBlock.port(WriteAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
-            YReadVec[i] <== YBlock.read(ReadAddr);
+            BwdYReadVec[i] <== YBlock.port(PortAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+            FwdYReadVec[i] <== YBlock.read(ReadAddr);
             // Ry
             Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
             RyBlock.port(WriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
@@ -124,28 +141,33 @@ class LayerBuffer extends KernelLib{
         
         // Output Vector
         DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
-         YVec = OutVecType.newInstance(this);
-        RyVec = OutVecType.newInstance(this);
+        FwdYVec = OutVecType.newInstance(this);
+        BwdYVec = OutVecType.newInstance(this);
+          RyVec = OutVecType.newInstance(this);
         for (int i=0; i<NumOutBlocks; ++i) {
-            List<DFEVar>  YReadtoMux = new ArrayList<DFEVar>(MuxWidth);
-            List<DFEVar> RyReadtoMux = new ArrayList<DFEVar>(MuxWidth);
-            List<DFEVar>    YIntoMux = new ArrayList<DFEVar>(MuxWidth);
-            List<DFEVar>   RyIntoMux = new ArrayList<DFEVar>(MuxWidth);            
+            List<DFEVar>  FwdYReadtoMux = new ArrayList<DFEVar>(MuxWidth);
+            List<DFEVar>  BwdYReadtoMux = new ArrayList<DFEVar>(MuxWidth);
+            List<DFEVar>    RyReadtoMux = new ArrayList<DFEVar>(MuxWidth);
+            List<DFEVar>       YIntoMux = new ArrayList<DFEVar>(MuxWidth);
+            List<DFEVar>      RyIntoMux = new ArrayList<DFEVar>(MuxWidth);            
             for (int j=0; j<MuxWidth; ++j) {
-                 YReadtoMux.add(YReadVec[i*MuxWidth+j]);
-                RyReadtoMux.add(RyReadVec[i*MuxWidth+j]);
-                   YIntoMux.add(YIn[i*MuxWidth+j]);
-                  RyIntoMux.add(RyIn[i*MuxWidth+j]);
+                 FwdYReadtoMux.add(FwdYReadVec[i*MuxWidth+j]);
+                 BwdYReadtoMux.add(BwdYReadVec[i*MuxWidth+j]);
+                   RyReadtoMux.add(RyReadVec[i*MuxWidth+j]);
+                      YIntoMux.add(YIn[i*MuxWidth+j]);
+                     RyIntoMux.add(RyIn[i*MuxWidth+j]);
             }
-            DFEVar  YfromBRAM = control.mux(BaseRdAddrCol, YReadtoMux);
-            DFEVar  YfromIn   = control.mux(BaseRdAddrCol, YIntoMux);
-            DFEVar RyfromBRAM = control.mux(BaseRdAddrCol, RyReadtoMux);
-            DFEVar RyfromIn   = control.mux(BaseRdAddrCol, RyIntoMux);            
-             YVec[i] <== RWCollision ?  YfromIn :  YfromBRAM;
-            RyVec[i] <== RWCollision ? RyfromIn : RyfromBRAM;
+            DFEVar  FwdYfromBRAM = control.mux(FwdBaseRdAddrCol, FwdYReadtoMux);
+            DFEVar  BwdYfromBRAM = control.mux(BwdBaseRdAddrCol, BwdYReadtoMux);
+            DFEVar     YfromIn   = control.mux(FwdBaseRdAddrCol, YIntoMux);
+            DFEVar    RyfromBRAM = control.mux(FwdBaseRdAddrCol, RyReadtoMux);
+            DFEVar    RyfromIn   = control.mux(FwdBaseRdAddrCol, RyIntoMux);            
+             FwdYVec[i] <== RWCollision ?  YfromIn : FwdYfromBRAM;
+             BwdYVec[i] <== BwdYfromBRAM;
+               RyVec[i] <== RWCollision ? RyfromIn :   RyfromBRAM;
         }
         
-//        debug.simPrintf("[%3d] Row[%d][%d] <= [%f,%f,%f,%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, WriteAddrCol, YIn[0], YIn[1], YIn[2], YIn[3], YIn[4], YIn[5], WriteValid, ReadAddrRow, OffsetReadAddrCol, YVec[0], YVec[1], YVec[2], RWCollision);
+//        debug.simPrintf("[%3d] Row[%d][%d] <= [%f,%f,%f,%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, WriteAddrCol, YIn[0], YIn[1], YIn[2], YIn[3], YIn[4], YIn[5], WriteValid, FwdReadAddrRow, FwdOffsetReadAddrCol, FwdYVec[0], FwdYVec[1], FwdYVec[2], RWCollision);
 
     }
     else if (NumInBlocks < NumOutBlocks) {
@@ -160,30 +182,37 @@ class LayerBuffer extends KernelLib{
         int NumBlocksPerInput = NumBlocks / NumInBlocks;
         DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
         
-        // Write Address
-        AddrGenerator WrAddrColCounter = new AddrGenerator(this, 1, InBlockDim, beginWrFwdData, isFwdDataInValid);
-        DFEVar WriteAddrCol = WrAddrColCounter.getAddr();
-        DFEVar WriteDataValid = WrAddrColCounter.isValid() & isFwdDataInValid;
-        ConstDenominator.ConstDivModResult WrAddrColDivMod = ConstDenominator.divMod(WriteAddrCol, BlockDim);
-        DFEVar   BaseWrAddrCol = WrAddrColDivMod.getQuotient();
- 		DFEVar OffsetWrAddrCol = WrAddrColDivMod.getRemainder().cast(AddrType);
- 		DFEVar WriteAddr = WriteAddrRow.cast(AddrType) * BlockDim + OffsetWrAddrCol;
+        // R/W Port: Write Address during Forward Propagation
+        AddrGenerator FwdWrAddrColCounter = new AddrGenerator(this, 1, InBlockDim, beginWrFwdData, isFwdDataInValid);
+        DFEVar FwdWriteAddrCol   = FwdWrAddrColCounter.getAddr();
+        DFEVar FwdWriteDataValid = FwdWrAddrColCounter.isValid() & isFwdDataInValid;
+        ConstDenominator.ConstDivModResult FwdWrAddrColDivMod = ConstDenominator.divMod(FwdWriteAddrCol, BlockDim);
+        DFEVar   FwdBaseWrAddrCol = FwdWrAddrColDivMod.getQuotient();
+ 		DFEVar FwdOffsetWrAddrCol = FwdWrAddrColDivMod.getRemainder().cast(AddrType);
+ 		DFEVar WriteAddr = WriteAddrRow.cast(AddrType) * BlockDim + FwdOffsetWrAddrCol;
 
-        // Read Address
-        DFEVar ReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + OffsetReadAddrCol.cast(AddrType);
-        RWCollision = (ReadAddr === WriteAddr) & WriteDataValid;
+        // R/W Port: Read Address during Backward Propagation
+        DFEVar BwdReadAddr = BwdReadAddrRow.cast(AddrType) * BlockDim + BwdOffsetReadAddrCol.cast(AddrType);
+        
+        // R/W Port: Port Address
+        DFEVar PortAddr = FwdWriteDataValid ? WriteAddr : BwdReadAddr;
+
+        // R Port: Read Address during Forward Propagation
+        DFEVar ReadAddr = FwdReadAddrRow.cast(AddrType) * BlockDim + FwdOffsetReadAddrCol.cast(AddrType);
+        RWCollision = (ReadAddr === WriteAddr) & FwdWriteDataValid;
 
         // Memory Block
         DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
-         YVec = OutVecType.newInstance(this);
-        RyVec = OutVecType.newInstance(this);
+         FwdYVec = OutVecType.newInstance(this);
+         BwdYVec = OutVecType.newInstance(this);
+           RyVec = OutVecType.newInstance(this);
         for (int i=0; i<NumInBlocks; ++i) {
             for (int j=0; j<NumBlocksPerInput; ++j) {
-                DFEVar WriteValid = WriteDataValid & (BaseWrAddrCol === j);
+                DFEVar WriteValid = FwdWriteDataValid & (FwdBaseWrAddrCol === j);
                 // Y
                 Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
-                YBlock.port(WriteAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
-                YVec[i*NumBlocksPerInput+j] <== YBlock.read(ReadAddr);
+                BwdYVec[i*NumBlocksPerInput+j] <== YBlock.port(PortAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+                FwdYVec[i*NumBlocksPerInput+j] <== YBlock.read(ReadAddr);
                 // Ry
                 Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
                 RyBlock.port(WriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
@@ -191,7 +220,7 @@ class LayerBuffer extends KernelLib{
             }
         }
         
-//        debug.simPrintf("[%3d] Row[%d][%d] <= [%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f,%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, WriteAddrCol, YIn[0], YIn[1], YIn[2], WriteDataValid, ReadAddrRow, OffsetReadAddrCol, YVec[0], YVec[1], YVec[2], YVec[3], YVec[4], YVec[5], RWCollision);
+//        debug.simPrintf("[%3d] Row[%d][%d] <= [%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f,%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, FwdWriteAddrCol, YIn[0], YIn[1], YIn[2], FwdWriteDataValid, FwdReadAddrRow, FwdOffsetReadAddrCol, FwdYVec[0], FwdYVec[1], FwdYVec[2], FwdYVec[3], FwdYVec[4], FwdYVec[5], RWCollision);
         
     }
     else {
@@ -204,32 +233,39 @@ class LayerBuffer extends KernelLib{
         int BlockSize = BlockDim*BufferDepth;
         DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
         
-        // Write Address
-        AddrGenerator WrAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginWrFwdData, isFwdDataInValid);
-        DFEVar WriteAddrCol = WrAddrColCounter.getAddr();
-        DFEVar WriteAddr = WriteAddrRow.cast(AddrType) * BlockDim + WriteAddrCol.cast(AddrType);
-        DFEVar WriteValid = WrAddrColCounter.isValid() & isFwdDataInValid;
+        // R/W Port: Write Address during Forward Propagation
+        AddrGenerator FwdWrAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginWrFwdData, isFwdDataInValid);
+        DFEVar FwdWriteAddrCol = FwdWrAddrColCounter.getAddr();
+        DFEVar WriteAddr  = WriteAddrRow.cast(AddrType) * BlockDim + FwdWriteAddrCol.cast(AddrType);
+        DFEVar WriteValid = FwdWrAddrColCounter.isValid() & isFwdDataInValid;
+
+        // R/W Port: Read Address during Backward Propagation
+        DFEVar BwdReadAddr = BwdReadAddrRow.cast(AddrType) * BlockDim + BwdOffsetReadAddrCol.cast(AddrType);
+
+        // R/W Port: Port Address
+        DFEVar PortAddr = WriteValid ? WriteAddr : BwdReadAddr;
 
         // Read Address
-        DFEVar ReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + OffsetReadAddrCol.cast(AddrType);
+        DFEVar ReadAddr = FwdReadAddrRow.cast(AddrType) * BlockDim + FwdOffsetReadAddrCol.cast(AddrType);
         RWCollision = (ReadAddr === WriteAddr) & WriteValid;
 
         // Memory Block
         DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
-         YVec = OutVecType.newInstance(this);
-        RyVec = OutVecType.newInstance(this);        
+         FwdYVec = OutVecType.newInstance(this);
+         BwdYVec = OutVecType.newInstance(this);
+           RyVec = OutVecType.newInstance(this);        
         for (int i=0; i<NumBlocks; ++i) {
             // Y
             Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
-            YBlock.port(WriteAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
-            YVec[i] <== RWCollision ? YIn[i] : YBlock.read(ReadAddr);
+            BwdYVec[i] <== YBlock.port(PortAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+            FwdYVec[i] <== RWCollision ? YIn[i] : YBlock.read(ReadAddr);
             // Ry
             Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
             RyBlock.port(WriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
             RyVec[i] <== RWCollision ? RyIn[i] : RyBlock.read(ReadAddr);
         }
         
-//        debug.simPrintf(WriteValid, "[%3d] Row[%d][%d] <= [%f,%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, WriteAddrCol, YIn[0], YIn[1], YIn[2], YIn[3], WriteValid, ReadAddrRow, OffsetReadAddrCol, YVec[0], YVec[1], YVec[2], YVec[3], RWCollision);
+//        debug.simPrintf(WriteValid, "[%3d] Row[%d][%d] <= [%f,%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, FwdWriteAddrCol, YIn[0], YIn[1], YIn[2], YIn[3], WriteValid, FwdReadAddrRow, FwdOffsetReadAddrCol, FwdYVec[0], FwdYVec[1], FwdYVec[2], FwdYVec[3], RWCollision);
 
     }
 

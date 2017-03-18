@@ -95,9 +95,14 @@ public class LayerBufferTest {
         DFEVar ReadAddrRow = RdYAddr;
         DFEVar OffsetReadAddrCol = RdXAddr;
         
+        // Supply Dummy Input for Backward Propagation Read Address
+        DFEVar BwdReadAddrRow = RdYAddr;
+        DFEVar BwdOffsetReadAddrCol = RdXAddr;
+        
         @SuppressWarnings("unused")
         LayerBuffer TestLayerBuffer = new LayerBuffer (this, 0, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks,
-                    BufferDepth, YIn, RyIn, WriteAddrRow, beginWrFwdData, isFwdDataInValid, ReadAddrRow, OffsetReadAddrCol); 
+                                          BufferDepth, YIn, RyIn, WriteAddrRow, beginWrFwdData, isFwdDataInValid,
+                                          ReadAddrRow, OffsetReadAddrCol, BwdReadAddrRow, BwdOffsetReadAddrCol); 
 
         }
     }
