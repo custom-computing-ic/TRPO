@@ -59,6 +59,7 @@ class MidLayer extends KernelLib{
     private DFEVector<DFEVar> YVec;
     private DFEVector<DFEVar> RyVec;
     private DFEVector<DFEVar> RGVec;
+    private DFEVector<DFEVar> BwdYVec;    
     private DFEVar FwdInputReadOffsetAddr;
     private DFEVar FwdFirstItemReady;
     private DFEVar FwdValid;
@@ -70,6 +71,7 @@ class MidLayer extends KernelLib{
     public DFEVector<DFEVar> getY()                     {return YVec;}
     public DFEVector<DFEVar> getRy()                    {return RyVec;}
     public DFEVector<DFEVar> getRG()                    {return RGVec;}
+    public DFEVector<DFEVar> getBwdYVec()               {return BwdYVec;}    
     public DFEVar getFwdInputReadOffsetAddr()           {return FwdInputReadOffsetAddr;}
     public DFEVar isFwdFirstItemReady()                 {return FwdFirstItemReady;}
     public DFEVar isFwdValid()                          {return FwdValid;}
@@ -474,6 +476,10 @@ class MidLayer extends KernelLib{
 
 
     /////////////////////// Calculation - Backward Propagation ///////////////////////
+
+    // Bypass next layer Y to output
+    BwdYVec = BwdNextLayer;
+
 
     // Accumulator Parameter
     Accumulator.Params BwdAccParam = Reductions.accumulator.makeAccumulatorConfig(Def.DataType)

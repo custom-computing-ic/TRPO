@@ -23,7 +23,7 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
  * @param <WriteAddrRow> Buffer Write Row Address, range [0, BufferDepth-1]
  * @param <beginWrite> Begin writing a vector to buffer 
  * @param <ReadAddrRow> Buffer Read Row Address, range [0, BufferDepth-1]
- * @param <beginRead> Begin reading a vector from buffer
+ * @param <OffsetReadAddrCol> Offset Column Read Address
  *
  * Remarks: 
  * <1> High Level Block needs to make sure the MAXIMUM possible value of WriteAddrRow is BufferDepth - 1
@@ -47,7 +47,7 @@ class InputBuffer extends KernelLib{
                     DFEVar WriteAddrRow,
                     DFEVar beginWrite,
                     DFEVar ReadAddrRow,
-                    DFEVar beginRead)
+                    DFEVar OffsetReadAddrCol)
     {
     
     super(owner);
@@ -71,9 +71,7 @@ class InputBuffer extends KernelLib{
     DFEVar WriteValid = WriteCounter.isValid();    
 
     // Read Address
-    AddrGenerator RdAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginRead);
-    DFEVar ReadAddrCol = RdAddrColCounter.getAddr();
-    DFEVar BlockReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + ReadAddrCol.cast(AddrType);
+    DFEVar ReadAddr = ReadAddrRow.cast(AddrType) * BlockDim + OffsetReadAddrCol.cast(AddrType);
 
     /////////////////////// Memory Allocation ///////////////////////
 
@@ -84,7 +82,7 @@ class InputBuffer extends KernelLib{
     for (int i=0; i<NumBlocks; ++i) {
         Memory<DFEVar> Block = mem.alloc(Def.DataType, BlockDim*BufferDepth);
         FwdData[i] <== Block.port(PortAddr, DataIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
-        BwdData[i] <== Block.read(BlockReadAddr);
+        BwdData[i] <== Block.read(ReadAddr);
     }
 
         

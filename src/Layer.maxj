@@ -60,6 +60,7 @@ class Layer extends KernelLib{
     private DFEVector<DFEVar> YVec;
     private DFEVector<DFEVar> RyVec;
     private DFEVector<DFEVar> RGVec;
+    private DFEVector<DFEVar> BwdYVec;
     private DFEVar FwdInputReadOffsetAddr;
     private DFEVar FwdFirstItemReady;
     private DFEVar FwdValid;
@@ -71,6 +72,7 @@ class Layer extends KernelLib{
     public DFEVector<DFEVar> getY()                     {return YVec;}
     public DFEVector<DFEVar> getRy()                    {return RyVec;}
     public DFEVector<DFEVar> getRG()                    {return RGVec;}
+    public DFEVector<DFEVar> getBwdYVec()               {return BwdYVec;}
     public DFEVar getFwdInputReadOffsetAddr()           {return FwdInputReadOffsetAddr;}
     public DFEVar isFwdFirstItemReady()                 {return FwdFirstItemReady;}
     public DFEVar isFwdValid()                          {return FwdValid;}
@@ -462,6 +464,8 @@ class Layer extends KernelLib{
 
     /////////////////////// Calculation - Backward Propagation ///////////////////////
 
+    // Bypass next layer Y to output
+    BwdYVec = BwdNextLayer;
 
     // De-Activation
     DFEVector<DFEVar> RGLayer = OutVecType.newInstance(this);
