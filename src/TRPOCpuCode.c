@@ -898,7 +898,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
         }
 
 
-        // For Hardware Debug - Print
+        // For Hardware Debug - Print Output Layer Values: y and Ry
         size_t NumBlocks = param.NumBlocks[NumLayers-1];
         size_t ActualSize = ActionSpaceDim;
         size_t BlockDim = (size_t) ceil( (double)param.PaddedLayerSize[NumLayers-1]/(double)NumBlocks );
@@ -958,7 +958,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                         return -1;
                     }
                 }
-                
+
                 // The R{} derivative w.r.t to Bias is the same as that w.r.t. the pre-activated value
                 RGB[i-1][j] = RGLayer[i][j];
             }
@@ -970,9 +970,35 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                     // The R{} Derivative w.r.t. to the weight from Neuron #j in Layer[i-1] to Neuron #k in Layer[i]
                     RGW[i-1][j*LayerSize[i]+k] = Layer[i-1][j] * RGLayer[i][k];
                     // Accumulate the Gradient from Neuron #k in Layer[i] to Neuron #j in Layer[i-1]
-                    RGLayer[i-1][j] += W[i-1][j*LayerSize[i]+k] * RGLayer[i][k];                    
+                    RGLayer[i-1][j] += W[i-1][j*LayerSize[i]+k] * RGLayer[i][k];
+                    // For Debug
+//                    if (i==1 && j==0) printf("[k=%zu] W[%zu][%zu][%zu]=%.12f, RGLayer[%zu][%zu]=%.12f => RGLayer[%zu][%zu]=%.12f\n", k, i-1, j, k, W[i-1][j*LayerSize[i]+k], i, k, RGLayer[i][k], i-1, j, RGLayer[i-1][j]);
                 }
             }
+
+//            if (i>1) {
+                // For Hardware Debug - Print RG_Layer
+                size_t layer = i-1;
+                size_t NumBlocks = param.NumBlocks[layer];
+                size_t ActualSize = LayerSize[layer];
+                size_t BlockDim = (size_t) ceil( (double)ActualSize/(double)NumBlocks );
+                printf("----Back Propagation----RG_Layer[%zu]\n", layer);
+                for (size_t dim=0; dim<BlockDim; ++dim) {
+                    printf("RG_%zu[0:%zu]=(", layer, NumBlocks-1);
+                    for (size_t blk=0; blk<NumBlocks; ++blk) {
+                        size_t pos = blk*BlockDim + dim;
+                        if (pos < ActualSize) {
+                            printf("[%zu]=%.12f", pos, RGLayer[layer][pos]);
+                            if (blk<NumBlocks-1) printf(", ");
+                        }
+                        else printf("0, ");
+                    }
+                    printf(")\n");
+                }
+//            }
+
+            
+            
         }
         
         // Accumulate the Fisher-Vector Product to result
@@ -1395,7 +1421,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     //////////////////// FPGA - Run ////////////////////
     
     // Number of Ticks to Run
-    size_t NumCompCycles = BlockDim[0] * BlockDim[1] + 200;
+    size_t NumCompCycles = BlockDim[0] * BlockDim[1] + 800;
     size_t NumTicks = WeightInitVecLength + 10 + NumCompCycles * NumSamples;
     
     // Allocation Memory Space for Dummy Output
@@ -1707,7 +1733,7 @@ void AntTestFPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 10;           // Note that thre are 50007 items
+    Param.NumSamples        = 1;           // Note that thre are 50007 items
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data

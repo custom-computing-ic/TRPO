@@ -30,7 +30,13 @@ class StdBuffer extends KernelLib{
     private DFEVector<DFEVar> Std;
     public  DFEVector<DFEVar> getStd()          {return Std;}
 
-    StdBuffer(KernelLib owner, int BlockDim, int NumBlocks, DFEVar DataIn, DFEVar beginInit, DFEVar beginRead)
+    StdBuffer(  KernelLib owner,
+                int BlockDim,
+                int NumBlocks,
+                DFEVar DataIn,
+                DFEVar beginInit,
+                DFEVar beginRead,
+                DFEVar isReadValid)
     {
     
     super(owner);
@@ -41,7 +47,7 @@ class StdBuffer extends KernelLib{
     AddrGenerator StdInitCounter = new AddrGenerator(owner, 1, NumBlocks*BlockDim, beginInit);
     DFEVar isStdInit = StdInitCounter.isValid();
 
-    // R/W Port: Std Data
+    // R/W Port: Init Std Data
     DFEVar Reset = beginInit | beginRead;
     Count.Params PortAddrColCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockDim))
                                                   .withInitValue(0)
@@ -60,6 +66,10 @@ class StdBuffer extends KernelLib{
                                                   .withReset(beginInit);
     Counter YCounter = control.count.makeCounter(YCounterParam);
     DFEVar YCount = YCounter.getCount(); 
+    
+    // R Port: Read Std Data
+    AddrGenerator ReadAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginRead, isReadValid);
+    DFEVar ReadAddrCol = ReadAddrColCounter.getAddr();
 
 
     /////////////////////// Memory ///////////////////////
@@ -68,8 +78,11 @@ class StdBuffer extends KernelLib{
     Std = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks).newInstance(this);
     for (int Y=0; Y<NumBlocks; ++Y) {
         Memory<DFEVar> Block = mem.alloc(Def.DataType, BlockDim);
-        Std[Y] <== Block.port(PortAddrCol, DataIn, isStdInit & (Y===YCount), RamWriteMode.WRITE_FIRST);
+        Block.port(PortAddrCol, DataIn, isStdInit & (Y===YCount), RamWriteMode.WRITE_FIRST);
+        Std[Y] <== Block.read(ReadAddrCol);
     }
+    
+//    debug.simPrintf(isStdInit, "[%4d] Init Block[%d] AddrCol=%d | Std[0:3]=(%.12f, %.12f, %.12f, %.12f) | Note (1/Std[i])^2 is stored.\n", control.count.simpleCounter(32), YCount, PortAddrCol, Std[0], Std[1], Std[2], Std[3]);
 
     }
 

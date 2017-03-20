@@ -253,7 +253,7 @@ class LayerBuffer extends KernelLib{
         DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
          FwdYVec = OutVecType.newInstance(this);
          BwdYVec = OutVecType.newInstance(this);
-           RyVec = OutVecType.newInstance(this);        
+           RyVec = OutVecType.newInstance(this);
         for (int i=0; i<NumBlocks; ++i) {
             // Y
             Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
@@ -261,11 +261,9 @@ class LayerBuffer extends KernelLib{
             FwdYVec[i] <== RWCollision ? YIn[i] : YBlock.read(ReadAddr);
             // Ry
             Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
-            RyBlock.port(WriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
+            RyBlock.port(PortAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
             RyVec[i] <== RWCollision ? RyIn[i] : RyBlock.read(ReadAddr);
         }
-        
-//        debug.simPrintf(WriteValid, "[%3d] Row[%d][%d] <= [%f,%f,%f,%f], En=%d | Row[%d][%d] => [%f,%f,%f,%f], Collision=%d\n", control.count.simpleCounter(16), WriteAddrRow, FwdWriteAddrCol, YIn[0], YIn[1], YIn[2], YIn[3], WriteValid, FwdReadAddrRow, FwdOffsetReadAddrCol, FwdYVec[0], FwdYVec[1], FwdYVec[2], FwdYVec[3], RWCollision);
 
     }
 

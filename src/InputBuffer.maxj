@@ -85,7 +85,7 @@ class InputBuffer extends KernelLib{
         BwdData[i] <== Block.read(ReadAddr);
     }
 
-        
+
 //    debug.simPrintf(WriteValid, "[%3d] Row[%d][%d] <= [%f,%f,%f,%f], En=%d | FwdData[%d][%d] => [%f,%f,%f,%f]\n", control.count.simpleCounter(16), PortAddr, PortAddrCol, DataIn[0], DataIn[1], DataIn[2], DataIn[3], WriteValid, PortAddr, PortAddrCol, FwdData[0], FwdData[1], FwdData[2], FwdData[3]);
 
 
