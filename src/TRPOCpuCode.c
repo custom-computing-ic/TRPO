@@ -976,7 +976,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                 }
             }
 
-//            if (i>1) {
+            if (i==1) {
                 // For Hardware Debug - Print RG_Layer
                 size_t layer = i-1;
                 size_t NumBlocks = param.NumBlocks[layer];
@@ -995,7 +995,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                     }
                     printf(")\n");
                 }
-//            }
+            }
 
             
             

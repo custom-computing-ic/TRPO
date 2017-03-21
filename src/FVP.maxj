@@ -69,26 +69,25 @@ class FVP extends KernelLib{
     if ((LayerSize.length!=NumLayers)||(AcFunc.length!=NumLayers)||(NumBlocks.length!=NumLayers)) {
         throw new IllegalArgumentException("[ERROR] Length of LayerSize, AcFunc and numBlocks must be NumLayers.");
     }
-    
-    // Example LayerSize
-    //  Humanoid: 376 - 128 - 64 - 17
-    //       Ant: 111 -  64 - 32 -  8
-    // Example NumBlocks
-    // NumBlocks: 32 - 8 - 4 - 4
-    
+
     // Calculate BlockDim
     int [] BlockDim = new int[NumLayers];
     for (int i=0; i<NumLayers; ++i) BlockDim[i] = LayerSize[i] / NumBlocks[i];
 
-    // Number of Cycles needed to do forward and backward propagation for one sample
-    // TODO Need to consider OutBlockDimCycleTime
-    int NumCyclesPerSample = BlockDim[0] * BlockDim[1] + 200;
-    
-    // TODO Pipelining between successive inputs
-    // Total Number of Cycles
-    int TotalNumCycles = NumCyclesPerSample * NumSamples;
+    // Number of Cycles needed for Forward or Back Propagation for one sample
+    // IMPORTANT: By default we assume BlockDim[0]>=BlockDim[2]>=Computation Latency
+    if (BlockDim[0]<BlockDim[2]) {
+        System.out.println("[Warning] BlockDim[0] = "+BlockDim[0]+", BlockDim[2]="+BlockDim[2]+".");
+        System.out.println("[Warning] Better efficiency is achieved when BlockDim[0] >= BlockDim[2].");
+        System.out.println("[Warning] Consider changing NumBlocks[] settings to make BlockDim[0] >= BlockDim[2].");
+        
+    }
+    int MaxBlkDim0Dim2 = Math.max(BlockDim[0], BlockDim[2]);
+    int FwdPropCyclesPerSample = BlockDim[0] + (BlockDim[1]-1)*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
+    int BwdPropCyclesPerSample = BlockDim[1]*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
+    int PropCyclesPerSample    = Math.max(FwdPropCyclesPerSample, BwdPropCyclesPerSample);
+    int PropCyclesTotal        = PropCyclesPerSample * NumSamples;
 
-    
     /////////////////////// Types ///////////////////////
 
     // Type of Buffer Read and Write Row Address
@@ -101,14 +100,6 @@ class FVP extends KernelLib{
     DFEVectorType<DFEVar> Y3_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[3]);
 
 
-    /////////////////////// High Level Control ///////////////////////
-    
-    // TODO Pipelining between successive inputs
-    
-    // Tick
-    DFEVar Tick = control.count.simpleCounter(32);
-
-    
     /////////////////////// Control - Weight Initialisation ///////////////////////
     
     // Parameters
@@ -157,69 +148,66 @@ class FVP extends KernelLib{
     DFEVar beginStdInit = isBiasStdInitiating & (BiasStdInitCount === FstLayerBiasInitCycles + SndLayerBiasInitCycles + TrdLayerBiasInitCycles);
 
 
-    /////////////////////// Control - Forward Propagation ///////////////////////
-    
-    // Total Counter
-    AddrGenerator TotalCounter = new AddrGenerator(this, 1, TotalNumCycles, beginFVPCalc);
-    DFEVar isFVPCalculating = TotalCounter.isValid();
-    
-    // Inner Loop - Counting the current sample
-    // Note: When this counter wraps, it means the data for the current sample is no longer needed.
-    //       So that its values in the buffer can be overwritten by subsequent items.
-    Count.Params InnerLoopCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumCyclesPerSample))
+    /////////////////////// Top Level Control ///////////////////////
+
+    // Inner Loop - Counting the Forward Propagation of a sample
+    // Note: When this counter wraps, it means the system is ready to forward propagation a new sample
+    //       The back propagation of the current sample is carried out during the forward propagation of the new sample
+    Count.Params InnerLoopCounterParam = control.count.makeParams(MathUtils.bitsToAddress(PropCyclesPerSample))
                                                   .withInitValue(0)
-                                                  .withMax(NumCyclesPerSample)
+                                                  .withMax(PropCyclesPerSample)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
                                                   .withReset(beginFVPCalc);
     Counter InnerLoopCounter = control.count.makeCounter(InnerLoopCounterParam);
     DFEVar InnerLoopCount = InnerLoopCounter.getCount();
 
-    // Outer Loop - Currently processing #OuterLoopCount sample
-    Count.Params OuterLoopCounterParam = control.count.makeParams(MathUtils.bitsToRepresentUnsigned(NumSamples))
-                                                  .withInitValue(1)
-                                                  .withMax(NumSamples)
+    // Outer Loop - Counting the number of samples processed
+    Count.Params OuterLoopCounterParam = control.count.makeParams(32)
+                                                  .withInitValue(0)
                                                   .withEnable(InnerLoopCounter.getWrap())
                                                   .withWrapMode(WrapMode.STOP_AT_MAX)
                                                   .withReset(beginFVPCalc);
     Counter OuterLoopCounter = control.count.makeCounter(OuterLoopCounterParam);
     DFEVar OuterLoopCount = OuterLoopCounter.getCount();
+
+    // Buffer Read and Write Row Address - Swapping Row 0 and Row 1
+    Count.Params FwdBufRowAddrCounterParam = control.count.makeParams(2)
+                                                  .withInitValue(0)
+                                                  .withMax(2)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withEnable(InnerLoopCounter.getWrap())
+                                                  .withReset(beginFVPCalc);
+    Counter FwdBufRowAddrCounter = control.count.makeCounter(FwdBufRowAddrCounterParam);
+    DFEVar FwdBufRowAddrCount = FwdBufRowAddrCounter.getCount();
+    DFEVar FwdBufRowAddr = FwdBufRowAddrCount.cast(dfeUInt(1));
+    DFEVar BwdBufRowAddr = ~FwdBufRowAddr;
+
+    // Forward Propagation Control
+    AddrGenerator FwdPropCounter = new AddrGenerator(this, 1, PropCyclesTotal, beginFVPCalc);
+    DFEVar isFwdCalculating = FwdPropCounter.isValid();
+    DFEVar beginFwdProp = (InnerLoopCount === 0) & isFwdCalculating;  
+
+    // Control Signal for Back Propagation
+    DFEVar beginBwdPropNextTick = InnerLoopCounter.getWrap() & isFwdCalculating;
+    DFEVar beginBwdProp = stream.offset(beginBwdPropNextTick, -1);
     
-    // Counter for Controlled Input
-    DFEVar beginNewSample = (InnerLoopCount === 0) & isFVPCalculating;
-    AddrGenerator NewSampleInputCounter = new AddrGenerator(this, 1, BlockDim[0], beginNewSample);
-    DFEVar isStreamingNewSample = NewSampleInputCounter.isValid();
-
-
-    /////////////////////// Overall Input Control ///////////////////////
-
     // Input Control Signal for Observation
+    AddrGenerator NewSampleInputCounter = new AddrGenerator(this, 1, BlockDim[0], beginFwdProp);
+    DFEVar isStreamingNewSample = NewSampleInputCounter.isValid();    
     EnObservationInput = isWeightInitiating | isStreamingNewSample;
 
     // Input Control Signal for BiasStdInitData
     EnBiasStdInput = isBiasStdInitiating;
 
 
-    /////////////////////// Input Buffer ///////////////////////
-
-    // Input Buffer Write Control
-    // TODO Currently we begin the forward propagation of a new item as soon as the first layer finishes
-    //      Currently we do not handle the overwriting issue
-    DFEVar beginNextSampleNextTick = InnerLoopCounter.getWrap() & isFVPCalculating;
-    Count.Params BufferWrAddrRowCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BufferDepth))
-                                                  .withInitValue(0)
-                                                  .withMax(BufferDepth)
-                                                  .withEnable(beginNextSampleNextTick)
-                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                  .withReset(beginFVPCalc);
-    Counter BufferWrAddrRowCounter = control.count.makeCounter(BufferWrAddrRowCounterParam);
-    DFEVar BufferWrAddrRow = BufferWrAddrRowCounter.getCount();    
+    /////////////////////// Input Buffer /////////////////////// 
 
     // Buffering Observation (y_0) for Forward Propagation and Backward Propagation.
     // In this buffer R/W Port is used for Forward Propagation (Read Address is automatically generated inside)
     // R Port is used for Back Propagation (Need to supply Read Address externally.)
-    DFEVar Buffer0WriteAddrRow         = BufferWrAddrRow;
-    DFEVar Buffer0beginWrFwdData       = beginNewSample;
-    DFEVar Buffer0BwdReadAddrRow       = Buffer0WriteAddrRow;
+    DFEVar Buffer0WriteAddrRow         = FwdBufRowAddr;
+    DFEVar Buffer0beginWrFwdData       = beginFwdProp;
+    DFEVar Buffer0BwdReadAddrRow       = BwdBufRowAddr;
     DFEVar Buffer0BwdOffsetReadAddrCol = dfeUInt(MathUtils.bitsToAddress(BlockDim[0])).newInstance(this);
 
     InputBuffer Buffer0 = new InputBuffer(this, BlockDim[0], NumBlocks[0], BufferDepth, Observation, 
@@ -231,20 +219,20 @@ class FVP extends KernelLib{
     /////////////////////// First Layer ///////////////////////
 
     // First Layer: Layer[0] => Layer[1]
-    DFEVar beginFwdPropFst = beginNewSample;
-    DFEVector<DFEVar> y_0_in = y_0.getType().newInstance(this);
+    DFEVar beginFwdPropFst = beginFwdProp;
+    DFEVector<DFEVar> y_0_in = Y0_Type.newInstance(this);
     for (int i=0; i<NumBlocks[0]; ++i) {
         y_0_in[i] <== isFstLayerWeightInitiating ? Observation[i] : y_0[i];
     }
 
-    //Inputs for Back Propagation
-    int Bwd_RG_1_CycleTime = Math.max(BlockDim[0], BlockDim[2]);
+    // Inputs for Back Propagation
+    int Bwd_Fst_CycleTime = Math.max(BlockDim[0], BlockDim[2]);
     DFEVector<DFEVar> Bwd_y_0_Fst = Buffer0.getBwdData();
     DFEVector<DFEVar> Bwd_y_1     = Y1_Type.newInstance(this);
     DFEVector<DFEVar> Bwd_RG_1    = Y1_Type.newInstance(this);
     DFEVar beginBwdPropFst = dfeUInt(1).newInstance(this);    
 
-    Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], Bwd_RG_1_CycleTime,
+    Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], Bwd_Fst_CycleTime,
                                      y_0_in, Bwd_y_0_Fst, Ry_0, Bwd_y_1, Bwd_RG_1, BiasStdInitData,
                                      beginWeightInitFstLayer, beginBiasInitFstLayer, beginFwdPropFst, beginBwdPropFst);
     
@@ -257,13 +245,13 @@ class FVP extends KernelLib{
     // Outputs for Back Propagation
     Buffer0BwdOffsetReadAddrCol <== FstLayer.getBwdPrevLayerReadOffsetAddr();
     
-    // Layer Buffer: Buffering y_1 and Ry_1
-    DFEVar FwdBuf1WriteAddrRow         = BufferWrAddrRow;
+    // Layer Buffer FwdBuf1: Buffering y_1 and Ry_1
+    DFEVar FwdBuf1WriteAddrRow         = FwdBufRowAddr;
     DFEVar FwdBuf1beginWrFwdData       = FstLayerFirstResultReady;
     DFEVar FwdBuf1isFwdDataInValid     = FstLayerOutputValid;
-    DFEVar FwdBuf1FwdReadAddrRow       = Reductions.streamHold(FwdBuf1WriteAddrRow, FwdBuf1beginWrFwdData);
+    DFEVar FwdBuf1FwdReadAddrRow       = FwdBufRowAddr;
     DFEVar FwdBuf1FwdOffsetReadAddrCol = dfeUInt(MathUtils.bitsToAddress(BlockDim[1])).newInstance(this);
-    DFEVar FwdBuf1BwdReadAddrRow       = FwdBuf1FwdReadAddrRow;
+    DFEVar FwdBuf1BwdReadAddrRow       = BwdBufRowAddr;
     DFEVar FwdBuf1BwdOffsetReadAddrCol = dfeUInt(MathUtils.bitsToAddress(BlockDim[1])).newInstance(this);
     
     LayerBuffer FwdBuf1 = new LayerBuffer(this, 1, BlockDim[1], NumBlocks[1], BlockDim[1], NumBlocks[1], BufferDepth, 
@@ -272,23 +260,15 @@ class FVP extends KernelLib{
                                           FwdBuf1BwdReadAddrRow, FwdBuf1BwdOffsetReadAddrCol);
     DFEVector<DFEVar>  y_1 = FwdBuf1.getFwdY();
     DFEVector<DFEVar> Ry_1 = FwdBuf1.getRy();
-    
-    
+
+
     /////////////////////// Second Layer ///////////////////////
-    
-    // Input Layer calculates a new vector every BlockDim[0] cycles, which is the InputLatency for MidLayer.
-    // TODO BlockDim[0] may be smaller than OutBlockDim of the MidLayer. So before the MidLayer finishes, 
-    //      FstLayer may have already moved to the next input, resulting in a RowAddr mismatch
-    //      Ideally, there should be min(OutBlockDim, CompLatency) of MidLayer >= InBlockDim of FstLayer
-    //      If RowAddr mismatch happens, consider FwdBuf1FwdReadAddrRow = Reductions.streamHold(FwdBuf1WriteAddrRow, FwdBuf1beginWrFwdData);
-    //      However this only works when MidLayer finishes current sample before InLayer outputs the first result of next item
-    //
-    // TODO Pay special attention to OutBlockDimCycleTime = max(BlockDim[0], BlockDim[2], CompLatency)
-    
+
     // Second Layer: Layer[1] => Layer[2]
-    int OutBlockDimCycleTime = Math.max(BlockDim[0], BlockDim[2]);
+    // Remarks: Fwd_Snd_CycleTime = max(BlockDim[0], BlockDim[2], CompLatency) 
+    int Fwd_Snd_CycleTime = Math.max(BlockDim[0], BlockDim[2]);
     DFEVar beginFwdPropSnd = FstLayerFirstResultReady;
-    DFEVector<DFEVar> y_1_in = y_1.getType().newInstance(this);
+    DFEVector<DFEVar> y_1_in = Y1_Type.newInstance(this);
     for (int i=0; i<NumBlocks[1]; ++i) {
         y_1_in[i] <== isSndLayerWeightInitiating ? Observation[i] : y_1[i];
     }
@@ -299,7 +279,7 @@ class FVP extends KernelLib{
     DFEVector<DFEVar> Bwd_RG_2    = Y2_Type.newInstance(this);
     DFEVar beginBwdPropSnd        = dfeUInt(1).newInstance(this);
 
-    MidLayer SndLayer = new MidLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2], OutBlockDimCycleTime,
+    MidLayer SndLayer = new MidLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2], Fwd_Snd_CycleTime,
                                            y_1_in, Bwd_y_1_Snd, Ry_1, Bwd_y_2, Bwd_RG_2, BiasStdInitData,
                                            beginWeightInitSndLayer, beginBiasInitSndLayer, beginFwdPropSnd, beginBwdPropSnd);
 
@@ -313,16 +293,16 @@ class FVP extends KernelLib{
     // Outputs for Back Propagation
     DFEVector<DFEVar> Bwd_RG_1_toBuffer = SndLayer.getRG();
     DFEVector<DFEVar> Bwd_y_1_toBuffer  = SndLayer.getBwdYVec();
-    FwdBuf1BwdOffsetReadAddrCol <== SndLayer.getBwdPrevLayerReadOffsetAddr();
-    beginBwdPropFst <== SndLayer.isBwdFirstItemReady();
+    FwdBuf1BwdOffsetReadAddrCol         <== SndLayer.getBwdPrevLayerReadOffsetAddr();
+    beginBwdPropFst                     <== SndLayer.isBwdFirstItemReady();
 
-    // Forward Propagation Layer Buffer: Buffering y_2 and Ry_2
-    DFEVar FwdBuf2WriteAddrRow         = FwdBuf1FwdReadAddrRow;
+    // Layer Buffer FwdBuf2: Buffering y_2 and Ry_2
+    DFEVar FwdBuf2WriteAddrRow         = FwdBufRowAddr;
     DFEVar FwdBuf2beginWrFwdData       = SndLayerFirstResultReady;
     DFEVar FwdBuf2isFwdDataInValid     = SndLayerOutputValid;
-    DFEVar FwdBuf2FwdReadAddrRow       = Reductions.streamHold(FwdBuf2WriteAddrRow, FwdBuf2beginWrFwdData);
+    DFEVar FwdBuf2FwdReadAddrRow       = FwdBufRowAddr;
     DFEVar FwdBuf2FwdOffsetReadAddrCol = dfeUInt(MathUtils.bitsToAddress(BlockDim[2])).newInstance(this);
-    DFEVar FwdBuf2BwdReadAddrRow       = FwdBuf2FwdReadAddrRow;
+    DFEVar FwdBuf2BwdReadAddrRow       = BwdBufRowAddr;
     DFEVar FwdBuf2BwdOffsetReadAddrCol = dfeUInt(MathUtils.bitsToAddress(BlockDim[2])).newInstance(this);
     
     LayerBuffer FwdBuf2 = new LayerBuffer(this, 2, BlockDim[2], NumBlocks[2], BlockDim[2], NumBlocks[2], BufferDepth, 
@@ -330,15 +310,15 @@ class FVP extends KernelLib{
                                           FwdBuf2isFwdDataInValid, FwdBuf2FwdReadAddrRow, FwdBuf2FwdOffsetReadAddrCol,
                                           FwdBuf2BwdReadAddrRow, FwdBuf2BwdOffsetReadAddrCol);
     DFEVector<DFEVar>  y_2 = FwdBuf2.getFwdY();
-    DFEVector<DFEVar> Ry_2 = FwdBuf2.getRy();    
+    DFEVector<DFEVar> Ry_2 = FwdBuf2.getRy();
     
-    // Back Propagation Layer Buffer: Buffering Bwd_y_1 and Bwd_RG_1
+    // Back Propagation Layer Buffer BwdBuf1: Buffering Bwd_y_1 and Bwd_RG_1
     // Here we are using the forward propagation functionality of the buffer to buffer the back propagation data
     // so dummy input is supplied to the back propagation part    
-    DFEVar BwdBuf1WriteAddrRow     = FwdBuf1FwdReadAddrRow;
+    DFEVar BwdBuf1WriteAddrRow     = BwdBufRowAddr;
     DFEVar BwdBuf1beginWrBwdData   = SndLayer.isBwdFirstItemReady();
     DFEVar BwdBuf1isBwdDataInValid = SndLayer.isBwdValid();
-    DFEVar BwdBuf1BwdReadAddrRow   = FwdBuf1FwdReadAddrRow;
+    DFEVar BwdBuf1BwdReadAddrRow   = BwdBufRowAddr;
     DFEVar BwdBuf1BwdReadAddrCol   = FstLayer.getBwdNextLayerReadOffsetAddr();
 
     LayerBuffer BwdBuf1 = new LayerBuffer(this, 2, BlockDim[1], NumBlocks[1], BlockDim[1], NumBlocks[1], BufferDepth, 
@@ -353,20 +333,19 @@ class FVP extends KernelLib{
 
     // Third Layer: Layer[2] => Layer[3]
     DFEVar beginFwdPropTrd = SndLayerFirstResultReady;
-    DFEVector<DFEVar> y_2_in = y_2.getType().newInstance(this);
+    DFEVector<DFEVar> y_2_in = Y2_Type.newInstance(this);
     for (int i=0; i<NumBlocks[2]; ++i) {
         y_2_in[i] <== isTrdLayerWeightInitiating ? Observation[i] : y_2[i];
     }
-    
 
     // Inputs for Back Propagation
-    int Bwd_RG_3_CycleTime = BlockDim[2];
+    int Bwd_Trd_CycleTime = BlockDim[2];
     DFEVector<DFEVar> Bwd_y_2_Trd = FwdBuf2.getBwdY();
     DFEVector<DFEVar> Bwd_y_3     = Y3_Type.newInstance(this);
     DFEVector<DFEVar> Bwd_RG_3    = Y3_Type.newInstance(this);
-    DFEVar beginBwdPropTrd        = dfeUInt(1).newInstance(this);
+    DFEVar beginBwdPropTrd        = beginBwdProp;
     
-    Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], Bwd_RG_3_CycleTime,
+    Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], Bwd_Trd_CycleTime,
                                      y_2_in, Bwd_y_2_Trd, Ry_2, Bwd_y_3, Bwd_RG_3, BiasStdInitData,
                                      beginWeightInitTrdLayer, beginBiasInitTrdLayer, beginFwdPropTrd, beginBwdPropTrd);
 
@@ -386,10 +365,10 @@ class FVP extends KernelLib{
     // Back Propagation Layer Buffer: Buffering Bwd_y_2 and Bwd_RG_2
     // Here we are using the forward propagation functionality of the buffer to buffer the back propagation data
     // so dummy input is supplied to the back propagation part    
-    DFEVar BwdBuf2WriteAddrRow     = FwdBuf1FwdReadAddrRow;
+    DFEVar BwdBuf2WriteAddrRow     = BwdBufRowAddr;
     DFEVar BwdBuf2beginWrBwdData   = TrdLayer.isBwdFirstItemReady();
     DFEVar BwdBuf2isBwdDataInValid = TrdLayer.isBwdValid();
-    DFEVar BwdBuf2BwdReadAddrRow   = FwdBuf1FwdReadAddrRow;
+    DFEVar BwdBuf2BwdReadAddrRow   = BwdBufRowAddr;
     DFEVar BwdBuf2BwdReadAddrCol   = SndLayer.getBwdNextLayerReadOffsetAddr();
 
     LayerBuffer BwdBuf2 = new LayerBuffer(this, 2, BlockDim[2], NumBlocks[2], BlockDim[2], NumBlocks[2], BufferDepth, 
@@ -400,7 +379,7 @@ class FVP extends KernelLib{
     Bwd_RG_2 <== BwdBuf2.getRy();
 
 
-    /////////////////////// Back Propagation Preparation ///////////////////////
+    /////////////////////// Back Propagation ///////////////////////
 
     // Std Block
     DFEVar beginStdRead   = beginFwdPropTrd;
@@ -412,47 +391,48 @@ class FVP extends KernelLib{
     DFEVector<DFEVar> RG_3_toBuffer = StdSqInv * Ry_3_toBuffer;
 
     // Layer Buffer: Buffering y_3 and RG_3
-    // Supply dummy input for Buffer3 BwdRead because there is no upper layers
-    DFEVar Buffer3WriteAddrRow         = FwdBuf1FwdReadAddrRow;
+    // Supply dummy input for Buffer3 FwdRead because there is no upper layers
+    DFEVar Buffer3WriteAddrRow         = FwdBufRowAddr;
     DFEVar Buffer3beginWrFwdData       = TrdLayerFirstResultReady;
     DFEVar Buffer3isFwdDataInValid     = TrdLayerOutputValid;
-    DFEVar Buffer3FwdReadAddrRow       = Reductions.streamHold(Buffer3WriteAddrRow, Buffer3beginWrFwdData);
-    DFEVar Buffer3FwdOffsetReadAddrCol = TrdLayer.getBwdNextLayerReadOffsetAddr();
+    DFEVar Buffer3BwdReadAddrRow       = BwdBufRowAddr;
+    DFEVar Buffer3BwdOffsetReadAddrCol = TrdLayer.getBwdNextLayerReadOffsetAddr();
     
     LayerBuffer Buffer3 = new LayerBuffer(this, 3, BlockDim[3], NumBlocks[3], BlockDim[3], NumBlocks[3], BufferDepth, 
                                           y_3_toBuffer, RG_3_toBuffer, Buffer3WriteAddrRow, Buffer3beginWrFwdData, 
-                                          Buffer3isFwdDataInValid, Buffer3FwdReadAddrRow, Buffer3FwdOffsetReadAddrCol,
-                                          Buffer3FwdReadAddrRow, Buffer3FwdOffsetReadAddrCol);
+                                          Buffer3isFwdDataInValid, Buffer3BwdReadAddrRow, Buffer3BwdOffsetReadAddrCol,
+                                          Buffer3BwdReadAddrRow, Buffer3BwdOffsetReadAddrCol);
     Bwd_y_3  <== Buffer3.getFwdY();
     Bwd_RG_3 <== Buffer3.getRy();
 
 
-    /////////////////////// Back Propagation ///////////////////////
-
-    // Begin Back Propagation in the Final Layer
-    beginBwdPropTrd <== stream.offset(TrdLayerFirstResultReady, -1);
-
-
-
     /////////////////////// Debug ///////////////////////
     
-    // Output Forward Propagation Result
-    Mean =  y_3_toBuffer;
-    Ry   = Ry_3_toBuffer;    
-
-
+    // Tick
+    DFEVar Tick = control.count.simpleCounter(32);    
+    
     // Forward Propagation Results
-    debug.simPrintf(beginNewSample, "[%4d] >>>>>>>>>>>> Begin Sample [%d] >>>>>>>>>>>>\n", Tick, OuterLoopCount);
+    Mean =  y_3_toBuffer;
+    Ry   = Ry_3_toBuffer;
+
+
+    debug.simPrintf(beginFwdProp, "[%4d] >>>>>>>>>>>> Begin Fwd Prop Sample [%d] >>>>>>>>>>>> Use[%d]\n", Tick, OuterLoopCount, FwdBufRowAddr);
+    debug.simPrintf(beginBwdProp, "[%4d] >>>>>>>>>>>> Begin Bwd Prop Sample [%d] >>>>>>>>>>>> Use[%d]\n", Tick, OuterLoopCount-1, BwdBufRowAddr);
+    
+//    debug.simPrintf(TrdLayer.isFwdFirstItemReady(), "[%4d] First Third Layer Forward Propagation Output is ready.\n", Tick);
     debug.simPrintf(TrdLayer.isFwdValid(), "[%4d] y[0:3]=(%.12f, %.12f, %.12f, %.12f), Ry[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Mean[0], Mean[1], Mean[2], Mean[3], Ry[0], Ry[1], Ry[2], Ry[3]);
     
     
     // Back Propagation Results
-//    debug.simPrintf(TrdLayer.isFwdFirstItemReady(), "[%4d] First Third Layer Forward Propagation Output is ready.\n", Tick);
+    DFEVector<DFEVar> RG_0 = FstLayer.getRG();
+
 //    debug.simPrintf(beginBwdPropTrd, "[%4d] Begin Third Layer Back Propagation...\n", Tick);
 //    debug.simPrintf(TrdLayer.isBwdValid(), "[%4d] RG_2[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Bwd_RG_2_toBuffer[0], Bwd_RG_2_toBuffer[1], Bwd_RG_2_toBuffer[2], Bwd_RG_2_toBuffer[3]);
 
 //    debug.simPrintf(beginBwdPropSnd, "[%4d] Begin Second Layer Back Propagation...\n", Tick);
 //    debug.simPrintf(SndLayer.isBwdValid(), "[%4d] RG_1[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Bwd_RG_1_toBuffer[0], Bwd_RG_1_toBuffer[1], Bwd_RG_1_toBuffer[2], Bwd_RG_1_toBuffer[3]);
+
+    debug.simPrintf(FstLayer.isBwdValid(), "[%4d] RG_0[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, RG_0[0], RG_0[1], RG_0[2], RG_0[3]);
 
     
     
