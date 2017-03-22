@@ -933,6 +933,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
         // Calculating R{} Gradient of KL w.r.t. output values from the final layer, i.e. R{d(KL)/d(mean_i)}
         for (size_t i=0; i<ActionSpaceDim; ++i) {
             RGLayer[NumLayers-1][i] = RyLayer[NumLayers-1][i] / Std[i] / Std[i];
+            printf("RGLayer[%zu][%zu]=%.12f\n", NumLayers-1, i, RGLayer[NumLayers-1][i]);
         }
 
         // Backward Propagation
@@ -976,7 +977,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                 }
             }
 
-            if (i==1) {
+            if (i<3) {
                 // For Hardware Debug - Print RG_Layer
                 size_t layer = i-1;
                 size_t NumBlocks = param.NumBlocks[layer];
@@ -1733,7 +1734,7 @@ void AntTestFPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 1;           // Note that thre are 50007 items
+    Param.NumSamples        = 10;           // Note that thre are 50007 items
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data

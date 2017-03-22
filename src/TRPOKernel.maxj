@@ -19,7 +19,6 @@ class TRPOKernel extends Kernel {
     
     int NumLayers     = Def.NumLayers;
     int NumSamples    = Def.NumSamples;
-    int BufferDepth   = Def.BufferDepth;
     int  [] LayerSize = Def.LayerSize;
     int  [] NumBlocks = Def.NumBlocks;
     char [] AcFunc    = Def.AcFunc;
@@ -64,7 +63,7 @@ class TRPOKernel extends Kernel {
     DFEVar BiasStdInitData = InBiasStd.cast(Def.DataType);
 
     // Fisher Vector Product
-    FVP FVPCalc = new FVP(this, NumLayers, LayerSize, NumBlocks, AcFunc, NumSamples, BufferDepth, 
+    FVP FVPCalc = new FVP(this, NumLayers, LayerSize, NumBlocks, AcFunc, NumSamples, 
                                 Observation, BiasStdInitData, beginInit, beginFVPCalc);
     EnObservationInput <== FVPCalc.getEnObservationInput();
     EnBiasStdInput     <== FVPCalc.getEnBiasStdInput();

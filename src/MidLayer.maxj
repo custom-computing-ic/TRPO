@@ -542,6 +542,9 @@ class MidLayer extends KernelLib{
 //    debug.simPrintf(isBwdCalculating, "[%4d] W[%2d][%2d]=W[%2d] | W[0:3][0]=(%f, %f, %f, %f), RG=(%f, %f, %f, %f) => %.12f | RG_1[0]=%.12f, V=%d\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, WPortAddr, BwdWGridVec[0][0], BwdWGridVec[0][1], BwdWGridVec[0][2], BwdWGridVec[0][3], RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3], thisStepMult[0], RGVec[0], BwdValid);
 //    debug.simPrintf(BwdValid, "\n");
 
+    // Debug - Checking BwdPrevLayer
+//    debug.simPrintf(isBwdCalculating, "[%4d] W[%2d][%2d]=W[%2d] | RGW[0:3][0]=>(%f, %f, %f, %f), y_1[0]=%.12f | RGW[0:3][0]<=(%f, %f, %f, %f)\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, WPortAddr, BwdRGWRdGridVec[0][0], BwdRGWRdGridVec[0][1], BwdRGWRdGridVec[0][2], BwdRGWRdGridVec[0][3], BwdPrevLayer[0], BwdRGWWrGridVec[0][0], BwdRGWWrGridVec[0][1], BwdRGWWrGridVec[0][2], BwdRGWWrGridVec[0][3]);
+
 	}
 
     /////////////////////// Activation Functions ///////////////////////

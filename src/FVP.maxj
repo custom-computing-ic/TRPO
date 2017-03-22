@@ -1,10 +1,8 @@
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
-import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
-import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
@@ -49,7 +47,6 @@ class FVP extends KernelLib{
           int [] NumBlocks,
           char [] AcFunc,
           int NumSamples,
-          int BufferDepth,
           DFEVector<DFEVar> Observation,
           DFEVar BiasStdInitData,
           DFEVar beginInit,
@@ -69,6 +66,9 @@ class FVP extends KernelLib{
     if ((LayerSize.length!=NumLayers)||(AcFunc.length!=NumLayers)||(NumBlocks.length!=NumLayers)) {
         throw new IllegalArgumentException("[ERROR] Length of LayerSize, AcFunc and numBlocks must be NumLayers.");
     }
+    
+    // Buffer Depth
+    int BufferDepth = Def.BufferDepth;
 
     // Calculate BlockDim
     int [] BlockDim = new int[NumLayers];
@@ -89,9 +89,6 @@ class FVP extends KernelLib{
     int PropCyclesTotal        = PropCyclesPerSample * NumSamples;
 
     /////////////////////// Types ///////////////////////
-
-    // Type of Buffer Read and Write Row Address
-    DFEType BufferRowAddrType = dfeUInt(MathUtils.bitsToAddress(BufferDepth));
 
     // Type of each layer
     DFEVectorType<DFEVar> Y0_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[0]);
@@ -364,7 +361,7 @@ class FVP extends KernelLib{
     
     // Back Propagation Layer Buffer: Buffering Bwd_y_2 and Bwd_RG_2
     // Here we are using the forward propagation functionality of the buffer to buffer the back propagation data
-    // so dummy input is supplied to the back propagation part    
+    // so dummy input is supplied to the back propagation part
     DFEVar BwdBuf2WriteAddrRow     = BwdBufRowAddr;
     DFEVar BwdBuf2beginWrBwdData   = TrdLayer.isBwdFirstItemReady();
     DFEVar BwdBuf2isBwdDataInValid = TrdLayer.isBwdValid();
@@ -391,7 +388,8 @@ class FVP extends KernelLib{
     DFEVector<DFEVar> RG_3_toBuffer = StdSqInv * Ry_3_toBuffer;
 
     // Layer Buffer: Buffering y_3 and RG_3
-    // Supply dummy input for Buffer3 FwdRead because there is no upper layers
+    // Here we are using the forward propagation functionality of the buffer to buffer the back propagation data
+    // so dummy input is supplied to the back propagation part
     DFEVar Buffer3WriteAddrRow         = FwdBufRowAddr;
     DFEVar Buffer3beginWrFwdData       = TrdLayerFirstResultReady;
     DFEVar Buffer3isFwdDataInValid     = TrdLayerOutputValid;
@@ -430,9 +428,10 @@ class FVP extends KernelLib{
 //    debug.simPrintf(TrdLayer.isBwdValid(), "[%4d] RG_2[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Bwd_RG_2_toBuffer[0], Bwd_RG_2_toBuffer[1], Bwd_RG_2_toBuffer[2], Bwd_RG_2_toBuffer[3]);
 
 //    debug.simPrintf(beginBwdPropSnd, "[%4d] Begin Second Layer Back Propagation...\n", Tick);
-//    debug.simPrintf(SndLayer.isBwdValid(), "[%4d] RG_1[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Bwd_RG_1_toBuffer[0], Bwd_RG_1_toBuffer[1], Bwd_RG_1_toBuffer[2], Bwd_RG_1_toBuffer[3]);
+//    debug.simPrintf(SndLayer.isBwdValid(), "[%4d] RG_1[0:3]=(%.12f, %.12f, %.12f, %.12f), y_1[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Bwd_RG_1_toBuffer[0], Bwd_RG_1_toBuffer[1], Bwd_RG_1_toBuffer[2], Bwd_RG_1_toBuffer[3], Bwd_y_1_toBuffer[0], Bwd_y_1_toBuffer[1], Bwd_y_1_toBuffer[2], Bwd_y_1_toBuffer[3]);
 
-    debug.simPrintf(FstLayer.isBwdValid(), "[%4d] RG_0[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, RG_0[0], RG_0[1], RG_0[2], RG_0[3]);
+
+//    debug.simPrintf(FstLayer.isBwdValid(), "[%4d] RG_0[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, RG_0[0], RG_0[1], RG_0[2], RG_0[3]);
 
     
     

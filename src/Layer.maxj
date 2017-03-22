@@ -478,8 +478,8 @@ class Layer extends KernelLib{
     }
 
     // Calculate RGVec when this layer isn't first layer
-//    if (ID==0) RGVec = constant.vect(NumInBlocks, Def.DataType, 0);
-//    else {
+    if (ID==0) RGVec = constant.vect(NumInBlocks, Def.DataType, 0);
+    else {
     
         // TODO: Optimise bit width to avoid overflow
         DFEVector<DFEVar> Temp_RG = InVecType.newInstance(this);
@@ -512,15 +512,15 @@ class Layer extends KernelLib{
 
         // For Simulation
         // Debug - Checking De-Activation
-//        debug.simPrintf(isBwdCalculating & BwdRowAddrValid, "[%4d] W[%2d][%2d] RdAddr=%2d, Buf3RdAddr=%d | RG_3[0:3]=(%f,%f,%f,%f), y_3[0:3]=(%f, %f, %f, %f) | RGLayer[0:3][%2d]=(%f,%f,%f,%f)\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, WPortAddr, BwdNextLayerReadOffsetAddr, BwdNextRGLayer[0], BwdNextRGLayer[1], BwdNextRGLayer[2], BwdNextRGLayer[3], BwdNextLayer[0], BwdNextLayer[1], BwdNextLayer[2], BwdNextLayer[3], BwdColAddr, RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3]);    
+//        debug.simPrintf(isBwdCalculating & BwdRowAddrValid, "[%4d] W[%2d][%2d] RdAddr=%2d, Buf3RdAddr=%d | RG_3[0:3]=(%f,%f,%f,%f), y_3[0:3]=(%f, %f, %f, %f) | RGLayer[0:3][%2d]=(%f,%f,%f,%f)\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, WPortAddr, BwdNextLayerReadOffsetAddr, BwdNextRGLayer[0], BwdNextRGLayer[1], BwdNextRGLayer[2], BwdNextRGLayer[3], BwdNextLayer[0], BwdNextLayer[1], BwdNextLayer[2], BwdNextLayer[3], BwdColAddr, RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3]);
 
         // Debug - Checking RG Calculation - Row[0]Col[:]
 //        debug.simPrintf(BwdRowAddrValid, "[%4d] W[0][0:3][%d][%d]=(%.12f, %f, %f, %f), RGLayer[0:3]=(%.12f, %f, %f, %f), Temp_RG[0]=>%.12f | New_RG[0]=%.12f, Valid=%d\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, BwdWGridVec[0][0], BwdWGridVec[0][1], BwdWGridVec[0][2], BwdWGridVec[0][3], RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3], Temp_RG[0], New_RG[0], BwdValid);
 
         // Debug - Checking Back Propagation Results
-//       debug.simPrintf(BwdValid, "[%4d] RG_%d[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", control.count.simpleCounter(32), constant.var(dfeUInt(2), ID), RGVec[0], RGVec[1], RGVec[2], RGVec[3]);
+//        debug.simPrintf(BwdValid, "[%4d] RG_%d[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", control.count.simpleCounter(32), constant.var(dfeUInt(2), ID), RGVec[0], RGVec[1], RGVec[2], RGVec[3]);
 
-//    }
+    }
     
     // Calculate RGW
     // TODO: Optimise bit width to avoid overflow
