@@ -18,6 +18,7 @@ report/
 
 
 # git unignore setting
+!LICENSE.txt
 !SimpleTest*
 !PendulumTest*
 !SwimmerTest*
