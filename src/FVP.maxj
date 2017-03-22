@@ -24,7 +24,6 @@ import java.lang.Math;
  * @param <BiasStdInitData> Initialisation Data for Bias, VBias and Std
  *                      Note: BiasStdInitData is Bias and VBias for each layer, to be followed by Std
  * @param <beginInit> begin initialisation. Weight initialisation and bias initialisation are independent.
- * @param <beginFVPCalc> begin Fisher Vector Product Calculation for the data set
  *
  */
 
@@ -33,14 +32,15 @@ class FVP extends KernelLib{
 
     private DFEVar EnObservationInput;
     private DFEVar EnBiasStdInput;
-    private DFEVector<DFEVar> Mean;
-    private DFEVector<DFEVar> Ry;
+    private DFEVar FVPResult;
+    private DFEVar FVPResultValid;
     
     public DFEVar getEnObservationInput()       {return EnObservationInput;}
     public DFEVar getEnBiasStdInput()           {return EnBiasStdInput;}
-    public DFEVector<DFEVar> getMean()          {return Mean;}
-    public DFEVector<DFEVar> getRy()            {return Ry;}
-    
+    public DFEVar getFVPResult()                {return FVPResult;}
+    public DFEVar isFVPResultValid()            {return FVPResultValid;}
+
+
     FVP(  KernelLib owner,
           int NumLayers,
           int [] LayerSize,
@@ -49,8 +49,7 @@ class FVP extends KernelLib{
           int NumSamples,
           DFEVector<DFEVar> Observation,
           DFEVar BiasStdInitData,
-          DFEVar beginInit,
-          DFEVar beginFVPCalc
+          DFEVar beginInit
           )
     {
 
@@ -144,8 +143,12 @@ class FVP extends KernelLib{
     DFEVar beginBiasInitTrdLayer = isBiasStdInitiating & (BiasStdInitCount === FstLayerBiasInitCycles + SndLayerBiasInitCycles);
     DFEVar beginStdInit = isBiasStdInitiating & (BiasStdInitCount === FstLayerBiasInitCycles + SndLayerBiasInitCycles + TrdLayerBiasInitCycles);
 
+    // Trigger FVP Calculation when Bias and Std Initialisation finishes
+    DFEVar beginFVPCalcNextTick = isBiasStdInitiating & (BiasStdInitCount === BiasStdInitCycles-1);
+    DFEVar beginFVPCalc = stream.offset(beginFVPCalcNextTick, -1);
 
-    /////////////////////// Top Level Control ///////////////////////
+
+    /////////////////////// Control - Forward and Backward Propagation ///////////////////////
 
     // Inner Loop - Counting the Forward Propagation of a sample
     // Note: When this counter wraps, it means the system is ready to forward propagation a new sample
@@ -195,6 +198,32 @@ class FVP extends KernelLib{
 
     // Input Control Signal for BiasStdInitData
     EnBiasStdInput = isBiasStdInitiating;
+    
+    // Trigger Read Back when the Back Propagation of the last sample finishes
+    DFEVar beginReadBack10TicksLater = (OuterLoopCount === NumSamples+1);
+    DFEVar beginReadBack = stream.offset(beginReadBack10TicksLater, -10);
+
+
+    /////////////////////// Control - Read Back ///////////////////////
+
+    // Number of Cycles
+    int FstLayerReadBackCycles = LayerSize[0] * LayerSize[1] + LayerSize[1];
+    int SndLayerReadBackCycles = LayerSize[1] * LayerSize[2] + LayerSize[2];
+    int TrdLayerReadBackCycles = LayerSize[2] * LayerSize[3] + LayerSize[3];
+    int    TotalReadBackCycles = FstLayerReadBackCycles + SndLayerReadBackCycles + TrdLayerReadBackCycles;
+    
+    // Read Back Counter
+    AddrGenerator ReadBackCounter = new AddrGenerator(this, 1, TotalReadBackCycles, beginReadBack);
+    DFEVar ReadBackCount = ReadBackCounter.getAddr();
+    DFEVar isReadingBack = ReadBackCounter.isValid();
+    
+    // Begin Signals
+    DFEVar beginReadBackFstLayer = beginReadBack;
+    DFEVar beginReadBackSndLayer = (ReadBackCount === FstLayerReadBackCycles);
+    DFEVar beginReadBackTrdLayer = (ReadBackCount === FstLayerReadBackCycles + SndLayerReadBackCycles);
+
+    // FVP Result Valid
+    FVPResultValid = isReadingBack;
 
 
     /////////////////////// Input Buffer /////////////////////// 
@@ -230,8 +259,8 @@ class FVP extends KernelLib{
     DFEVar beginBwdPropFst = dfeUInt(1).newInstance(this);    
 
     Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], Bwd_Fst_CycleTime,
-                                     y_0_in, Bwd_y_0_Fst, Ry_0, Bwd_y_1, Bwd_RG_1, BiasStdInitData,
-                                     beginWeightInitFstLayer, beginBiasInitFstLayer, beginFwdPropFst, beginBwdPropFst);
+                                     y_0_in, Bwd_y_0_Fst, Ry_0, Bwd_y_1, Bwd_RG_1, BiasStdInitData, beginWeightInitFstLayer,
+                                     beginBiasInitFstLayer, beginFwdPropFst, beginBwdPropFst, beginReadBackFstLayer);
     
     // Outputs for Forward Propagation
     DFEVector<DFEVar>  y_1_toBuffer = FstLayer.getY();
@@ -277,8 +306,8 @@ class FVP extends KernelLib{
     DFEVar beginBwdPropSnd        = dfeUInt(1).newInstance(this);
 
     MidLayer SndLayer = new MidLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2], Fwd_Snd_CycleTime,
-                                           y_1_in, Bwd_y_1_Snd, Ry_1, Bwd_y_2, Bwd_RG_2, BiasStdInitData,
-                                           beginWeightInitSndLayer, beginBiasInitSndLayer, beginFwdPropSnd, beginBwdPropSnd);
+                                           y_1_in, Bwd_y_1_Snd, Ry_1, Bwd_y_2, Bwd_RG_2, BiasStdInitData, beginWeightInitSndLayer,
+                                            beginBiasInitSndLayer, beginFwdPropSnd, beginBwdPropSnd, beginReadBackSndLayer);
 
     // Outputs for Forward Propagation
     DFEVector<DFEVar>  y_2_toBuffer = SndLayer.getY();
@@ -343,8 +372,8 @@ class FVP extends KernelLib{
     DFEVar beginBwdPropTrd        = beginBwdProp;
     
     Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], Bwd_Trd_CycleTime,
-                                     y_2_in, Bwd_y_2_Trd, Ry_2, Bwd_y_3, Bwd_RG_3, BiasStdInitData,
-                                     beginWeightInitTrdLayer, beginBiasInitTrdLayer, beginFwdPropTrd, beginBwdPropTrd);
+                                     y_2_in, Bwd_y_2_Trd, Ry_2, Bwd_y_3, Bwd_RG_3, BiasStdInitData, beginWeightInitTrdLayer,
+                                     beginBiasInitTrdLayer, beginFwdPropTrd, beginBwdPropTrd, beginReadBackTrdLayer);
 
     // Outputs for Forward Propagation
     DFEVector<DFEVar>  y_3_toBuffer = TrdLayer.getY();
@@ -404,21 +433,36 @@ class FVP extends KernelLib{
     Bwd_RG_3 <== Buffer3.getRy();
 
 
+    /////////////////////// Read Back ///////////////////////
+
+    // Read Back Data from Each Layer
+    DFEVar FstLayerReadBackData = FstLayer.getRGReadBackData();
+    DFEVar SndLayerReadBackData = SndLayer.getRGReadBackData();
+    DFEVar TrdLayerReadBackData = TrdLayer.getRGReadBackData();
+
+    // Select Read Back Data
+    DFEVar isReadingBackFstLayer = FstLayer.isRGReadBackValid();
+    DFEVar isReadingBackSndLayer = SndLayer.isRGReadBackValid();
+    DFEVar isReadingBackTrdLayer = TrdLayer.isRGReadBackValid();
+    DFEVar ReadBackSel  = isReadingBackTrdLayer.cat(isReadingBackSndLayer.cat(isReadingBackFstLayer));
+    DFEVar ReadBackData = control.oneHotMux(ReadBackSel, FstLayerReadBackData, SndLayerReadBackData, TrdLayerReadBackData);
+
+    // Final FVP Result
+    // Note: Due to stream padding, host code may need to do de-padding
+    FVPResult = ReadBackData;
+
+
     /////////////////////// Debug ///////////////////////
     
     // Tick
     DFEVar Tick = control.count.simpleCounter(32);    
-    
-    // Forward Propagation Results
-    Mean =  y_3_toBuffer;
-    Ry   = Ry_3_toBuffer;
 
 
     debug.simPrintf(beginFwdProp, "[%4d] >>>>>>>>>>>> Begin Fwd Prop Sample [%d] >>>>>>>>>>>> Use[%d]\n", Tick, OuterLoopCount, FwdBufRowAddr);
     debug.simPrintf(beginBwdProp, "[%4d] >>>>>>>>>>>> Begin Bwd Prop Sample [%d] >>>>>>>>>>>> Use[%d]\n", Tick, OuterLoopCount-1, BwdBufRowAddr);
     
 //    debug.simPrintf(TrdLayer.isFwdFirstItemReady(), "[%4d] First Third Layer Forward Propagation Output is ready.\n", Tick);
-    debug.simPrintf(TrdLayer.isFwdValid(), "[%4d] y[0:3]=(%.12f, %.12f, %.12f, %.12f), Ry[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Mean[0], Mean[1], Mean[2], Mean[3], Ry[0], Ry[1], Ry[2], Ry[3]);
+    debug.simPrintf(TrdLayer.isFwdValid(), "[%4d] y[0:3]=(%.12f, %.12f, %.12f, %.12f), Ry[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, y_3_toBuffer[0], y_3_toBuffer[1], y_3_toBuffer[2], y_3_toBuffer[3], Ry_3_toBuffer[0], Ry_3_toBuffer[1], Ry_3_toBuffer[2], Ry_3_toBuffer[3]);
     
     
     // Back Propagation Results

@@ -80,13 +80,14 @@ public class MidLayerTest {
         DFEVector<DFEVar> BwdPrevLayer   = constant.vect(NumInBlocks,  Def.DataType, 0);
         DFEVector<DFEVar> BwdNextLayer   = constant.vect(NumOutBlocks, Def.DataType, 0);
         DFEVector<DFEVar> BwdNextRGLayer = constant.vect(NumOutBlocks, Def.DataType, 0);
-        DFEVar beginBwdProp = constant.var(dfeUInt(1), 0);
+        DFEVar beginBwdProp  = constant.var(dfeUInt(1), 0);
+        DFEVar beginReadBack = constant.var(dfeUInt(1), 0);
          
         // Layer Block
         @SuppressWarnings("unused")
         MidLayer TestMidLayer = new MidLayer(this, 1, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks, InputLatency,
                                              PrevLayer, BwdPrevLayer, PrevRyLayer, BwdNextLayer, BwdNextRGLayer, BiasInitData, 
-                                             beginInit, beginInit, beginFwdProp, beginBwdProp);
+                                             beginInit, beginInit, beginFwdProp, beginBwdProp, beginReadBack);
 
         }
     }

@@ -1421,19 +1421,34 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
 
     //////////////////// FPGA - Run ////////////////////
     
-    // Number of Ticks to Run
-    size_t NumCompCycles = BlockDim[0] * BlockDim[1] + 800;
-    size_t NumTicks = WeightInitVecLength + 10 + NumCompCycles * NumSamples;
+    // Here we assume 4 layers
     
-    // Allocation Memory Space for Dummy Output
-    double * Output = (double *) calloc(NumTicks, sizeof(double));
+    // Number of Cycles to Run - Forward Propagation and Back Propagation
+    size_t MaxBlkDim0Dim2     = (BlockDim[0]>BlockDim[2]) ? BlockDim[0] : BlockDim[2];
+    size_t FwdCyclesPerSample = BlockDim[0] + (BlockDim[1]-1)*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
+    size_t BwdCyclesPerSample = BlockDim[1]*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
+    size_t CyclesPerSample    = (FwdCyclesPerSample>BwdCyclesPerSample) ? FwdCyclesPerSample : BwdCyclesPerSample;
+    size_t PropCyclesTotal    = CyclesPerSample * (NumSamples + 1);
+    
+    // Number of Cycles to Run - Read Result
+    size_t FVPLength = 0;
+    for (size_t i=0; i<NumLayers-1; ++i) {
+        FVPLength += PaddedLayerSize[i] * PaddedLayerSize[i+1];
+        FVPLength += PaddedLayerSize[i+1];
+    }
+    
+    // Number of Cycles to Run - Total
+    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + FVPLength + 100;
+
+    // Allocation Memory Space for FVP Result
+    double * FVPResult = (double *) calloc(FVPLength, sizeof(double));
 
     // Init Advanced Static Interface
     TRPO_RunTRPO_actions_t run_action;
     run_action.param_Ticks          = NumTicks;
     run_action.instream_Observation = Observation;
     run_action.instream_BiasStd     = BiasStd;
-    run_action.outstream_Output     = Output;
+    run_action.outstream_FVP        = FVPResult;
 
     // Run DFE
     fprintf(stderr, "[INFO] Running on FPGA...\n");
@@ -1444,14 +1459,42 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     max_unload(engine);
     TRPO_free();
 
+    // Read FVP into Result
+    pos = 0;
+    size_t FVPPos = 0;
+    for (size_t i=0; i<NumLayers-1; ++i) {
+        size_t  curLayerDimPadded = PaddedLayerSize[i];
+        size_t nextLayerDimPadded = PaddedLayerSize[i+1];
+        size_t  curLayerDimReal   = LayerSize[i];
+        size_t nextLayerDimReal   = LayerSize[i+1];
+        for (size_t j=0; j<curLayerDimPadded; ++j) {
+            for (size_t k=0; k<nextLayerDimPadded; ++k) {
+                if ( (j<curLayerDimReal) && (k<nextLayerDimReal) ) {
+                    Result[pos] = FVPResult[FVPPos];
+                    pos++;
+                }
+                FVPPos++;
+            }
+        }
+        for (size_t k=0; k<nextLayerDimPadded; ++k) {
+            if (k<nextLayerDimReal) {
+                Result[pos] = FVPResult[FVPPos];
+                pos++;
+            }
+            FVPPos++;
+        }
+    }
+    for (size_t k=0; k<ActionSpaceDim; ++k) {
+        Result[pos] = 2 * NumSamples * VLogStd[k];
+        pos++;
+    }    
 
-/*
     // Averaging Fisher Vector Product over the samples and apply CG Damping
     for (size_t i=0; i<pos; ++i) {
         Result[i] = Result[i] / (double)NumSamples;
         Result[i] += CG_Damping * Input[i];
     }
-*/
+
 
     //////////////////// Clean Up ////////////////////
 
@@ -1465,8 +1508,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     free(Observ); free(Mean); free(Std); free(VLogStd);
 
     // Free Memories Allocated for DFE
-    free(Observation); free(BiasStd); 
-    free(Output);
+    free(Observation); free(BiasStd); free(FVPResult);
 
     return 0;
 }
@@ -1746,43 +1788,45 @@ void AntTestFPGA() {
 
     // Memory Allocation
     size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
-    double * input   = (double *) calloc(NumParams, sizeof(double));
-    double * result  = (double *) calloc(NumParams, sizeof(double));
-    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
+    double *       input = (double *) calloc(NumParams, sizeof(double));
+    double *  CPU_output = (double *) calloc(NumParams, sizeof(double));
+    double * FPGA_output = (double *) calloc(NumParams, sizeof(double));
     
-    // Read Input and Expect
+    // Read Input
     for (size_t i=0; i<NumParams; ++i) {
-         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
+        double temp;
+        fscanf(DataFilePointer, "%lf %lf", &input[i], &temp);
     }
     fclose(DataFilePointer);
 
-    int FVPStatus = FVPFast(Param, result, input);
-    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
+    //////////////////// CPU ////////////////////
 
+    int FVPStatus = FVPFast(Param, CPU_output, input);
+    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
 
     //////////////////// FPGA ////////////////////
 
-    FVP_FPGA(Param, result, input);
+    FVP_FPGA(Param, FPGA_output, input);
 
-
-/*
-    
+    //////////////////// Check Results ////////////////////
+  
     // Check Result
     double percentage_err = 0;
     for (size_t i=0; i<NumParams; ++i) {        
-        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
-    	if (expect[i] != 0) percentage_err += cur_err;
-    	if (cur_err>0.1) printf("FVP[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
+        double cur_err = abs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100;
+    	if (CPU_output[i] != 0) percentage_err += cur_err;
+    	if (cur_err>0.1) {
+//    	    printf("FVP_FPGA[%zu]=%e, FVP_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
+    	}
     }
     percentage_err = percentage_err / (double)NumParams;
     printf("--------------------------- Swimmer Test ----------------------------\n");
     printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
-*/
 
 
     // Clean Up    
-    free(input); free(result); free(expect);
+    free(input); free(CPU_output); free(FPGA_output);
     
     return;
 
@@ -1806,6 +1850,6 @@ int main()
     AntTestFPGA();
 
 
-
     return 0;
 }
+
