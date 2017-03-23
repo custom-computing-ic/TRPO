@@ -10,6 +10,8 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
 
+import java.lang.Math;
+
 /**
  * Storage for Std
  *
@@ -49,7 +51,7 @@ class StdBuffer extends KernelLib{
 
     // R/W Port: Init Std Data
     DFEVar Reset = beginInit | beginRead;
-    Count.Params PortAddrColCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockDim))
+    Count.Params PortAddrColCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(BlockDim),1))
                                                   .withInitValue(0)
                                                   .withMax(BlockDim)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -58,7 +60,7 @@ class StdBuffer extends KernelLib{
     DFEVar PortAddrCol = PortAddrColCounter.getCount();
 
     // YCount - Selecting the block to write to according to Y
-    Count.Params YCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumBlocks))
+    Count.Params YCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(NumBlocks),1))
                                                   .withInitValue(0)
                                                   .withMax(NumBlocks)
                                                   .withEnable(PortAddrColCounter.getWrap())
@@ -77,7 +79,7 @@ class StdBuffer extends KernelLib{
     // Memory Block
     Std = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks).newInstance(this);
     for (int Y=0; Y<NumBlocks; ++Y) {
-        Memory<DFEVar> Block = mem.alloc(Def.DataType, BlockDim);
+        Memory<DFEVar> Block = mem.alloc(Def.DataType, Math.max(BlockDim,2));
         Block.port(PortAddrCol, DataIn, isStdInit & (Y===YCount), RamWriteMode.WRITE_FIRST);
         Std[Y] <== Block.read(ReadAddrCol);
     }

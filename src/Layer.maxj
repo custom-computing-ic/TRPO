@@ -17,6 +17,8 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
 import maxpower.KernelBinaryOp.Add;
 import maxpower.TreeReduce;
 
+import java.lang.Math;
+
 /**
  * A layer of both forward propagation and back propagation
  *
@@ -109,7 +111,17 @@ class Layer extends KernelLib{
     {
 
     super(owner);
+
+    /////////////////////// Parameters ///////////////////////
     
+    // Argument Check - Check if InBlockDimCycleTime is too small  
+    if (InBlockDimCycleTime<4) {
+        System.out.println("[Warning] Layer["+ID+"] InBlockDimCycleTime = "+InBlockDimCycleTime+", which is really small.");
+        System.out.println("[Warning] Layer["+ID+"] Must make sure InBlockDimCycleTime > Layer"+ID+"Offset_RG");
+        System.out.println("[Warning] Layer["+ID+"] Otherwise the Backpropagation Results may not be correct.");
+    }
+
+
     /////////////////////// Data Types ///////////////////////
     
     int BlockSize = InBlockDim*OutBlockDim;
@@ -117,7 +129,7 @@ class Layer extends KernelLib{
     DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
     DFEVectorType<DFEVector<DFEVar>> FwdGridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
     DFEVectorType<DFEVector<DFEVar>> BwdGridVecType = new DFEVectorType<DFEVector<DFEVar>>(OutVecType, NumInBlocks);
-    DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
+    DFEType AddrType = dfeUInt(Math.max(MathUtils.bitsToAddress(BlockSize),1));
 
 
 
@@ -151,7 +163,7 @@ class Layer extends KernelLib{
     DFEVar isInitVW  = isInit & (InitCount >= NumOutBlocks*BlockSize);
     
     // InitWPortAddr - Initialisation using R/W port
-    Count.Params InitWPortAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockSize))
+    Count.Params InitWPortAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(BlockSize),1))
                                                   .withInitValue(0)
                                                   .withMax(BlockSize)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -160,7 +172,7 @@ class Layer extends KernelLib{
     DFEVar InitWPortAddr = InitWPortAddrCounter.getCount();
 
     // InitWYCount - to Select the block to write according to Y
-    Count.Params InitWYCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
+    Count.Params InitWYCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(NumOutBlocks),1))
                                                   .withInitValue(0)
                                                   .withMax(NumOutBlocks)
                                                   .withEnable(InitWPortAddrCounter.getWrap())
@@ -183,7 +195,7 @@ class Layer extends KernelLib{
     DFEVar isInitVB      = isBiasInit & (BiasInitCount >= NumOutBlocks*OutBlockDim);
     
     // InitBPortAddr - Initialisation using R/W port
-    Count.Params InitBPortAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
+    Count.Params InitBPortAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(OutBlockDim),1))
                                                   .withInitValue(0)
                                                   .withMax(OutBlockDim)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -192,7 +204,7 @@ class Layer extends KernelLib{
     DFEVar InitBPortAddr = InitBPortAddrCounter.getCount();
 
     // BYCount - to Select the block to write according to Y
-    Count.Params InitBYCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
+    Count.Params InitBYCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(NumOutBlocks),1))
                                                   .withInitValue(0)
                                                   .withMax(NumOutBlocks)
                                                   .withEnable(InitBPortAddrCounter.getWrap())
@@ -219,7 +231,7 @@ class Layer extends KernelLib{
     DFEVar isFwdCalculating = FwdCounter.isValid();
 
     // Row Address in InBlockDim domain - to be used by Weight
-    Count.Params FwdRowAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(InBlockDim))
+    Count.Params FwdRowAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(InBlockDim),1))
                                                   .withInitValue(0)
                                                   .withMax(InBlockDim)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -228,7 +240,7 @@ class Layer extends KernelLib{
     DFEVar FwdRowAddr = FwdRowAddrCounter.getCount();
 
     // Col Address in OutBlockDim domain - to be used by Weight, Bias and Temp Result
-    Count.Params FwdColAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
+    Count.Params FwdColAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(OutBlockDim),1))
                                                   .withInitValue(0)
                                                   .withMax(OutBlockDim)
                                                   .withEnable(FwdRowAddrCounter.getWrap())
@@ -332,7 +344,7 @@ class Layer extends KernelLib{
     DFEVar isReadingBackRGW  = (ReadBackCount < RGWReadBackCycles) & isReadingBack;
 
     // RG Read Column Offset Address - For RGW and RGB
-    Count.Params RGReadColOffsetAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
+    Count.Params RGReadColOffsetAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(OutBlockDim),1))
                                                             .withInitValue(0)
                                                             .withMax(OutBlockDim)
                                                             .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -341,7 +353,7 @@ class Layer extends KernelLib{
     DFEVar RGReadColOffsetAddr = RGReadColOffsetAddrCounter.getCount();
 
     // RG Read Column Base Address - For RGW and RGB
-    Count.Params RGReadColBaseAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
+    Count.Params RGReadColBaseAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(NumOutBlocks),1))
                                                             .withInitValue(0)
                                                             .withMax(NumOutBlocks)
                                                             .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -351,7 +363,7 @@ class Layer extends KernelLib{
     DFEVar RGReadColBaseAddr = RGReadColBaseAddrCounter.getCount();
     
     // RG Read Row Offset Address - For RGW
-    Count.Params RGReadRowOffsetAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(InBlockDim))
+    Count.Params RGReadRowOffsetAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(InBlockDim),1))
                                                             .withInitValue(0)
                                                             .withMax(InBlockDim)
                                                             .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -361,7 +373,7 @@ class Layer extends KernelLib{
     DFEVar RGReadRowOffsetAddr = RGReadRowOffsetAddrCounter.getCount();
 
     // RG Read Row Base Address - For RGW
-    Count.Params RGReadRowBaseAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumInBlocks))
+    Count.Params RGReadRowBaseAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(NumInBlocks),1))
                                                             .withInitValue(0)
                                                             .withMax(NumInBlocks)
                                                             .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -412,11 +424,11 @@ class Layer extends KernelLib{
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // W Block
-            Memory<DFEVar> WBlock = mem.alloc(Def.DataType, BlockSize);
+            Memory<DFEVar> WBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
             BwdWGridVec[X][Y] <== WBlock.port(WPortAddr, FwdPrevLayer[X], isInitW & (Y===InitWYCount), RamWriteMode.WRITE_FIRST);
             FwdWGridVec[Y][X] <== WBlock.read(WReadAddr);
             // VW Block
-            Memory<DFEVar> VWBlock = mem.alloc(Def.DataType, BlockSize);
+            Memory<DFEVar> VWBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
             VWBlock.port(WPortAddr, FwdPrevLayer[X], isInitVW & (Y===InitWYCount), RamWriteMode.WRITE_FIRST);
             FwdVWGridVec[Y][X] <== VWBlock.read(WReadAddr);
         }
@@ -427,11 +439,11 @@ class Layer extends KernelLib{
     DFEVector<DFEVar> VBias = OutVecType.newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // B Block
-        Memory<DFEVar> BBlock = mem.alloc(Def.DataType, OutBlockDim);
+        Memory<DFEVar> BBlock = mem.alloc(Def.DataType, Math.max(OutBlockDim,2));
         BBlock.port(BPortAddr, BiasInitData, isInitB & (Y===InitBYCount), RamWriteMode.WRITE_FIRST);
         Bias[Y] <== BBlock.read(BReadAddr);
         // VB Block
-        Memory<DFEVar> VBBlock = mem.alloc(Def.DataType, OutBlockDim);
+        Memory<DFEVar> VBBlock = mem.alloc(Def.DataType, Math.max(OutBlockDim,2));
         VBBlock.port(BPortAddr, BiasInitData, isInitVB & (Y===InitBYCount), RamWriteMode.WRITE_FIRST);
         VBias[Y] <== VBBlock.read(BReadAddr);
     }
@@ -439,12 +451,12 @@ class Layer extends KernelLib{
     // RGW Memory Blocks
     DFEVector<DFEVector<DFEVar>> BwdRGWRdGridVec = BwdGridVecType.newInstance(this);
     DFEVector<DFEVector<DFEVar>> BwdRGWWrGridVec = BwdGridVecType.newInstance(this);
-    DFEVar BwdRGWWrAddr = dfeUInt(MathUtils.bitsToAddress(BlockSize)).newInstance(this);
+    DFEVar BwdRGWWrAddr = dfeUInt(Math.max(MathUtils.bitsToAddress(BlockSize),1)).newInstance(this);
     DFEVar BwdRGWWrEn   = dfeUInt(1).newInstance(this);
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // RGW Block
-            Memory<DFEVar> RGWBlock = mem.alloc(Def.DataType, BlockSize);
+            Memory<DFEVar> RGWBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
             RGWBlock.port(BwdRGWWrAddr, BwdRGWWrGridVec[X][Y], BwdRGWWrEn, RamWriteMode.WRITE_FIRST);
             BwdRGWRdGridVec[X][Y] <== RGWBlock.read(RGWReadAddr);
         }
@@ -453,11 +465,11 @@ class Layer extends KernelLib{
     // RGB Memory Blocks
     DFEVector<DFEVar> BwdRGBRead  = OutVecType.newInstance(this);
     DFEVector<DFEVar> BwdRGBWrite = OutVecType.newInstance(this);
-    DFEVar BwdRGBWrAddr = dfeUInt(MathUtils.bitsToAddress(OutBlockDim)).newInstance(this);
+    DFEVar BwdRGBWrAddr = dfeUInt(Math.max(MathUtils.bitsToAddress(OutBlockDim),1)).newInstance(this);
     DFEVar BwdRGBWrEn   = dfeUInt(1).newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // RGB Block
-        Memory<DFEVar> RGBBlock = mem.alloc(Def.DataType, OutBlockDim);
+        Memory<DFEVar> RGBBlock = mem.alloc(Def.DataType, Math.max(OutBlockDim,2));
         RGBBlock.port(BwdRGBWrAddr, BwdRGBWrite[Y], BwdRGBWrEn, RamWriteMode.WRITE_FIRST);
         BwdRGBRead[Y] <== RGBBlock.read(RGBReadAddr);
     }
@@ -579,7 +591,7 @@ class Layer extends KernelLib{
         // Temp Result of RG
         for (int X=0; X<NumInBlocks; ++X) {
             // Temp RG
-            Memory<DFEVar> BRAM_RG = mem.alloc(Def.DataType, InBlockDim);
+            Memory<DFEVar> BRAM_RG = mem.alloc(Def.DataType, Math.max(InBlockDim,2));
             Temp_RG[X] <== BRAM_RG.read(BwdRowAddr);
             BRAM_RG.port(TempWrAddr_RG, TempWrData_RG[X], TempWrEn_RG, RamWriteMode.WRITE_FIRST);
         }

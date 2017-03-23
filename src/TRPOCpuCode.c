@@ -897,7 +897,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
             if (err>0.1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
         }
 
-
+/*
         // For Hardware Debug - Print Output Layer Values: y and Ry
         size_t NumBlocks = param.NumBlocks[NumLayers-1];
         size_t ActualSize = ActionSpaceDim;
@@ -924,7 +924,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
             }
             printf(")\n");
         }
-
+*/
 
         //////////////////// Pearlmutter Backward Propagation ////////////////////
 
@@ -975,6 +975,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                     // For Debug
 //                    if (i==1 && j==0) printf("[k=%zu] W[%zu][%zu][%zu]=%.12f, RGLayer[%zu][%zu]=%.12f => RGLayer[%zu][%zu]=%.12f\n", k, i-1, j, k, W[i-1][j*LayerSize[i]+k], i, k, RGLayer[i][k], i-1, j, RGLayer[i-1][j]);
                 }
+/*                
                 if (i==3) {
                 // For Hardware Debug - Print RGW Calculation
                 size_t OutLayer     = i;
@@ -1006,6 +1007,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                     printf(")\n");
                 }
                 }
+*/                
             }
 
 /*
@@ -1470,7 +1472,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     }
     
     // Number of Cycles to Run - Total
-    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + FVPLength + 500;
+    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + FVPLength + 20;
 
     // Allocation Memory Space for FVP Result
     double * FVPResult = (double *) calloc(FVPLength, sizeof(double));
@@ -1489,17 +1491,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
 
     // Free Engine and Maxfile
     max_unload(engine);
-    TRPO_free();
-
-
-    // Print FVP Results
-    FILE *ResultFilePointer = fopen("FVPResultRAW.txt", "w");
-    if(ResultFilePointer == NULL) fprintf(stderr, "[ERROR] Open Output File Failed.\n");
-    for (size_t i=0; i<FVPLength; ++i) {
-        fprintf(ResultFilePointer, "FVPResult[%4zu] = % 014.12f\n", i, FVPResult[i]);
-    }
-    fclose(ResultFilePointer);
-    
+    TRPO_free();    
 
     // Read FVP into Result
     pos = 0;
@@ -1818,8 +1810,8 @@ void AntTestFPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 1;           // Note that thre are 50007 items
-    Param.CG_Damping        = 0;
+    Param.NumSamples        = 10;           // Note that thre are 50007 items
+    Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
     FILE *DataFilePointer = fopen(FVPFileName, "r");

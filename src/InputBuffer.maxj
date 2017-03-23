@@ -10,6 +10,7 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
+import java.lang.Math;
 
 /**
  * Buffering Input for the First Layer
@@ -54,10 +55,10 @@ class InputBuffer extends KernelLib{
     
     /////////////////////// Control ///////////////////////
     
-    DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockDim*BufferDepth));
+    DFEType AddrType = dfeUInt(Math.max(MathUtils.bitsToAddress(BlockDim*BufferDepth),1));
 
     // R/W Port: Data for Forward Propagation
-    Count.Params PortAddrColCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockDim))
+    Count.Params PortAddrColCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(BlockDim),1))
                                                   .withInitValue(0)
                                                   .withMax(BlockDim)
                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
@@ -80,7 +81,7 @@ class InputBuffer extends KernelLib{
     FwdData = VecType.newInstance(this);
     BwdData = VecType.newInstance(this);
     for (int i=0; i<NumBlocks; ++i) {
-        Memory<DFEVar> Block = mem.alloc(Def.DataType, BlockDim*BufferDepth);
+        Memory<DFEVar> Block = mem.alloc(Def.DataType, Math.max(BlockDim*BufferDepth,2));
         FwdData[i] <== Block.port(PortAddr, DataIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
         BwdData[i] <== Block.read(ReadAddr);
     }

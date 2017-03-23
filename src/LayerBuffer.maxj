@@ -99,7 +99,7 @@ class LayerBuffer extends KernelLib{
         int BlockDim  = InBlockDim;
         int BlockSize = BlockDim*BufferDepth;
         int MuxWidth  = NumInBlocks / NumOutBlocks;
-        DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
+        DFEType AddrType = dfeUInt(Math.max(MathUtils.bitsToAddress(BlockSize),1));
         
         // R/W Port: Write Address during Forward Propagation
         AddrGenerator FwdWrAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginWrFwdData, isFwdDataInValid);
@@ -109,13 +109,13 @@ class LayerBuffer extends KernelLib{
         
         // R Port: Read Address during Backward Propagation
  		ConstDenominator.ConstDivModResult BwdRdAddrColDivMod = ConstDenominator.divMod(BwdOffsetReadAddrCol, BlockDim);
- 		DFEVar   BwdBaseRdAddrCol = BwdRdAddrColDivMod.getQuotient().cast(dfeUInt(MathUtils.bitsToAddress(MuxWidth)));
+ 		DFEVar   BwdBaseRdAddrCol = BwdRdAddrColDivMod.getQuotient().cast(dfeUInt(Math.max(MathUtils.bitsToAddress(MuxWidth),1)));
  		DFEVar BwdOffsetRdAddrCol = BwdRdAddrColDivMod.getRemainder().cast(AddrType);
  		DFEVar BwdReadAddr        = BwdReadAddrRow.cast(AddrType) * BlockDim + BwdOffsetRdAddrCol;
         
         // R Port: Read Address during Forward Propagation
  		ConstDenominator.ConstDivModResult FwdRdAddrColDivMod = ConstDenominator.divMod(FwdOffsetReadAddrCol, BlockDim);
- 		DFEVar   FwdBaseRdAddrCol = FwdRdAddrColDivMod.getQuotient().cast(dfeUInt(MathUtils.bitsToAddress(MuxWidth)));
+ 		DFEVar   FwdBaseRdAddrCol = FwdRdAddrColDivMod.getQuotient().cast(dfeUInt(Math.max(MathUtils.bitsToAddress(MuxWidth),1)));
  		DFEVar FwdOffsetRdAddrCol = FwdRdAddrColDivMod.getRemainder().cast(AddrType);
  		DFEVar FwdReadAddr        = FwdReadAddrRow.cast(AddrType) * BlockDim + FwdOffsetRdAddrCol;
  		RWCollision = (FwdReadAddr === FwdWriteAddr) & FwdWriteValid;
@@ -127,12 +127,12 @@ class LayerBuffer extends KernelLib{
         DFEVector<DFEVar> RyReadVec = ReadVecType.newInstance(this);
         for (int i=0; i<NumBlocks; ++i) {
             // Y
-            Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
+            Memory<DFEVar> YBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
             YBlock.port(FwdWriteAddr, YIn[i], FwdWriteValid, RamWriteMode.WRITE_FIRST);
             FwdYReadVec[i] <== YBlock.read(FwdReadAddr);
             BwdYReadVec[i] <== YBlock.read(BwdReadAddr);
             // Ry
-            Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
+            Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
             RyBlock.port(FwdWriteAddr, RyIn[i], FwdWriteValid, RamWriteMode.WRITE_FIRST);
             RyReadVec[i] <== RyBlock.read(FwdReadAddr);
         }
@@ -178,7 +178,7 @@ class LayerBuffer extends KernelLib{
         int BlockDim = OutBlockDim;
         int BlockSize = BlockDim*BufferDepth;
         int NumBlocksPerInput = NumBlocks / NumInBlocks;
-        DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
+        DFEType AddrType = dfeUInt(Math.max(MathUtils.bitsToAddress(BlockSize),1));
         
         // R/W Port: Write Address during Forward Propagation
         AddrGenerator FwdWrAddrColCounter = new AddrGenerator(this, 1, InBlockDim, beginWrFwdData, isFwdDataInValid);
@@ -205,12 +205,12 @@ class LayerBuffer extends KernelLib{
             for (int j=0; j<NumBlocksPerInput; ++j) {
                 DFEVar WriteValid = FwdWriteDataValid & (FwdBaseWrAddrCol === j);
                 // Y
-                Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
+                Memory<DFEVar> YBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
                 YBlock.port(FwdWriteAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
                 FwdYVec[i*NumBlocksPerInput+j] <== YBlock.read(FwdReadAddr);
                 BwdYVec[i*NumBlocksPerInput+j] <== YBlock.read(BwdReadAddr);
                 // Ry
-                Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
+                Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
                 RyBlock.port(FwdWriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
                 RyVec[i*NumBlocksPerInput+j] <== RyBlock.read(FwdReadAddr);                
             }
@@ -227,7 +227,7 @@ class LayerBuffer extends KernelLib{
         int NumBlocks = NumOutBlocks;
         int BlockDim = OutBlockDim;
         int BlockSize = BlockDim*BufferDepth;
-        DFEType AddrType = dfeUInt(MathUtils.bitsToAddress(BlockSize));
+        DFEType AddrType = dfeUInt(Math.max(MathUtils.bitsToAddress(BlockSize),1));
         
         // R/W Port: Write Address during Forward Propagation
         AddrGenerator FwdWrAddrColCounter = new AddrGenerator(this, 1, BlockDim, beginWrFwdData, isFwdDataInValid);
@@ -249,12 +249,12 @@ class LayerBuffer extends KernelLib{
            RyVec = OutVecType.newInstance(this);
         for (int i=0; i<NumBlocks; ++i) {
             // Y
-            Memory<DFEVar> YBlock = mem.alloc(Def.DataType, BlockSize);
+            Memory<DFEVar> YBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
             YBlock.port(FwdWriteAddr, YIn[i], FwdWriteValid, RamWriteMode.WRITE_FIRST);
             FwdYVec[i] <== RWCollision ? YIn[i] : YBlock.read(FwdReadAddr);
             BwdYVec[i] <== YBlock.read(BwdReadAddr);
             // Ry
-            Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, BlockSize);
+            Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
             RyBlock.port(FwdWriteAddr, RyIn[i], FwdWriteValid, RamWriteMode.WRITE_FIRST);
             RyVec[i] <== RWCollision ? RyIn[i] : RyBlock.read(FwdReadAddr);
         }

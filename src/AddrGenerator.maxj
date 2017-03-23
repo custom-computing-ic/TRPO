@@ -5,6 +5,8 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
+import java.lang.Math;
+
 class AddrGenerator extends KernelLib {
 
     private DFEVar Addr;
@@ -29,7 +31,7 @@ class AddrGenerator extends KernelLib {
     // Valid: 0, 0, 1, 1, 1, 1, ... ,     1, 0, 0, 0, ...
 
     int CounterBitWidth = MathUtils.bitsToRepresentUnsigned(Max);
-    int AddressBitWidth = MathUtils.bitsToAddress(Max);
+    int AddressBitWidth = Math.max(MathUtils.bitsToAddress(Max), 1);
     
     Count.Params CounterParam = control.count.makeParams(CounterBitWidth)
                                              .withInitValue(Max)
@@ -65,7 +67,7 @@ class AddrGenerator extends KernelLib {
     // Valid: 0, 0, 1, 1, 1, 1, ... ,     1, 0, 0, 0, ...
 
     int CounterBitWidth = MathUtils.bitsToRepresentUnsigned(Max);
-    int AddressBitWidth = MathUtils.bitsToAddress(Max);
+    int AddressBitWidth = Math.max(MathUtils.bitsToAddress(Max), 1);
 
     Count.Params CounterParam = control.count.makeParams(CounterBitWidth)
                                              .withInitValue(Max)
