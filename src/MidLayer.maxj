@@ -322,66 +322,60 @@ class MidLayer extends KernelLib{
     int RGBReadBackCycles = OutBlockDim * NumOutBlocks;
     int ReadBackCycles    = RGWReadBackCycles + RGBReadBackCycles;
 
-    // RGW Read Back Reset
-    DFEVar RGWReadBackReset = beginReadBack;
+    // RG Read Back Reset
+    DFEVar RGReadBackReset = beginReadBack;
 
     // Top Level Control    
-    AddrGenerator ReadBackCounter = new AddrGenerator(owner, 1, ReadBackCycles, RGWReadBackReset);
+    AddrGenerator ReadBackCounter = new AddrGenerator(owner, 1, ReadBackCycles, RGReadBackReset);
     DFEVar ReadBackCount     = ReadBackCounter.getAddr();
     DFEVar isReadingBack     = ReadBackCounter.isValid();
     DFEVar isReadingBackRGW  = (ReadBackCount < RGWReadBackCycles) & isReadingBack;
 
-    // RGW Read Back Address
-    Count.Params RGWReadBackAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(BlockSize))
-                                                            .withInitValue(0)
-                                                            .withMax(BlockSize)
-                                                            .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                            .withReset(RGWReadBackReset);
-    Counter RGWReadBackAddrCounter = control.count.makeCounter(RGWReadBackAddrCounterParam);
-    DFEVar RGWReadBackAddr = RGWReadBackAddrCounter.getCount();
-    
-    // Y Select - RGW Column Block Selection
-    Count.Params RGWYSelectCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
-                                                            .withInitValue(0)
-                                                            .withMax(NumOutBlocks)
-                                                            .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                            .withEnable(RGWReadBackAddrCounter.getWrap())
-                                                            .withReset(RGWReadBackReset);
-    Counter RGWYSelectCounter = control.count.makeCounter(RGWYSelectCounterParam);
-    DFEVar RGWYSelect = RGWYSelectCounter.getCount();
-    
-    // X Select - RGW Row Block Selection
-    Count.Params RGWXSelectCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumInBlocks))
-                                                            .withInitValue(0)
-                                                            .withMax(NumInBlocks)
-                                                            .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                            .withEnable(RGWYSelectCounter.getWrap())
-                                                            .withReset(RGWReadBackReset);
-    Counter RGWXSelectCounter = control.count.makeCounter(RGWXSelectCounterParam);
-    DFEVar RGWXSelect = RGWXSelectCounter.getCount();
-    
-    // RGB Read Back Reset
-    DFEVar RGBReadBackReset = (ReadBackCount === RGWReadBackCycles);
-    
-    // RGB Read Back Address
-    Count.Params RGBReadBackAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
+    // RG Read Column Offset Address - For RGW and RGB
+    Count.Params RGReadColOffsetAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(OutBlockDim))
                                                             .withInitValue(0)
                                                             .withMax(OutBlockDim)
                                                             .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                            .withReset(RGBReadBackReset);
-    Counter RGBReadBackAddrCounter = control.count.makeCounter(RGBReadBackAddrCounterParam);
-    DFEVar RGBReadBackAddr = RGBReadBackAddrCounter.getCount();    
-    
-    // Y Select - RGB Column Block Selection
-    Count.Params RGBYSelectCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
+                                                            .withReset(RGReadBackReset);
+    Counter RGReadColOffsetAddrCounter = control.count.makeCounter(RGReadColOffsetAddrCounterParam);
+    DFEVar RGReadColOffsetAddr = RGReadColOffsetAddrCounter.getCount();
+
+    // RG Read Column Base Address - For RGW and RGB
+    Count.Params RGReadColBaseAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumOutBlocks))
                                                             .withInitValue(0)
                                                             .withMax(NumOutBlocks)
                                                             .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                            .withEnable(RGBReadBackAddrCounter.getWrap())
-                                                            .withReset(RGBReadBackReset);
-    Counter RGBYSelectCounter = control.count.makeCounter(RGBYSelectCounterParam);
-    DFEVar RGBYSelect = RGBYSelectCounter.getCount();
+                                                            .withEnable(RGReadColOffsetAddrCounter.getWrap())
+                                                            .withReset(RGReadBackReset);
+    Counter RGReadColBaseAddrCounter = control.count.makeCounter(RGReadColBaseAddrCounterParam);
+    DFEVar RGReadColBaseAddr = RGReadColBaseAddrCounter.getCount();
+    
+    // RG Read Row Offset Address - For RGW
+    Count.Params RGReadRowOffsetAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(InBlockDim))
+                                                            .withInitValue(0)
+                                                            .withMax(InBlockDim)
+                                                            .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                            .withEnable(RGReadColBaseAddrCounter.getWrap())
+                                                            .withReset(RGReadBackReset);
+    Counter RGReadRowOffsetAddrCounter = control.count.makeCounter(RGReadRowOffsetAddrCounterParam);
+    DFEVar RGReadRowOffsetAddr = RGReadRowOffsetAddrCounter.getCount();
 
+    // RG Read Row Base Address - For RGW
+    Count.Params RGReadRowBaseAddrCounterParam = control.count.makeParams(MathUtils.bitsToAddress(NumInBlocks))
+                                                            .withInitValue(0)
+                                                            .withMax(NumInBlocks)
+                                                            .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                            .withEnable(RGReadRowOffsetAddrCounter.getWrap())
+                                                            .withReset(RGReadBackReset);
+    Counter RGReadRowBaseAddrCounter = control.count.makeCounter(RGReadRowBaseAddrCounterParam);
+    DFEVar RGReadRowBaseAddr = RGReadRowBaseAddrCounter.getCount();
+    
+    // RGW Read Back Addr
+    DFEVar RGWReadBackAddr = RGReadRowOffsetAddr.cast(AddrType) * OutBlockDim + RGReadColOffsetAddr.cast(AddrType);
+
+    // RGB Read Back Addr
+    DFEVar RGBReadBackAddr = RGReadColOffsetAddr;
+    
     // Read Back Valid
     RGReadBackValid = isReadingBack;
 
@@ -639,12 +633,12 @@ class MidLayer extends KernelLib{
     // RGW Read Back Data
     DFEVector<DFEVar> RGWReadBackVec = InVecType.newInstance(this);
     for (int X=0; X<NumInBlocks; ++X) {
-        RGWReadBackVec[X] <== control.mux(RGWYSelect, BwdRGWRdGridVec[X].getElementsAsList());
+        RGWReadBackVec[X] <== control.mux(RGReadColBaseAddr, BwdRGWRdGridVec[X].getElementsAsList());
     }
-    DFEVar RGWReadBackData = control.mux(RGWXSelect, RGWReadBackVec.getElementsAsList());
+    DFEVar RGWReadBackData = control.mux(RGReadRowBaseAddr, RGWReadBackVec.getElementsAsList());
 
     // RGB Read Back Data
-    DFEVar RGBReadBackData = control.mux(RGBYSelect, BwdRGBRead.getElementsAsList());
+    DFEVar RGBReadBackData = control.mux(RGReadColBaseAddr, BwdRGBRead.getElementsAsList());
 
     // RG Read Back Data
     RGReadBackData = isReadingBackRGW ? RGWReadBackData : RGBReadBackData;

@@ -933,7 +933,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
         // Calculating R{} Gradient of KL w.r.t. output values from the final layer, i.e. R{d(KL)/d(mean_i)}
         for (size_t i=0; i<ActionSpaceDim; ++i) {
             RGLayer[NumLayers-1][i] = RyLayer[NumLayers-1][i] / Std[i] / Std[i];
-            printf("RGLayer[%zu][%zu]=%.12f\n", NumLayers-1, i, RGLayer[NumLayers-1][i]);
+//            printf("RGLayer[%zu][%zu]=%.12f\n", NumLayers-1, i, RGLayer[NumLayers-1][i]);
         }
 
         // Backward Propagation
@@ -975,8 +975,40 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                     // For Debug
 //                    if (i==1 && j==0) printf("[k=%zu] W[%zu][%zu][%zu]=%.12f, RGLayer[%zu][%zu]=%.12f => RGLayer[%zu][%zu]=%.12f\n", k, i-1, j, k, W[i-1][j*LayerSize[i]+k], i, k, RGLayer[i][k], i-1, j, RGLayer[i-1][j]);
                 }
+                if (i==3) {
+                // For Hardware Debug - Print RGW Calculation
+                size_t OutLayer     = i;
+                size_t InLayer      = i-1;
+                size_t NumOutBlocks = param.NumBlocks[OutLayer];
+                size_t OutBlockDim  = (size_t) ceil( (double)param.PaddedLayerSize[OutLayer]/(double)NumOutBlocks );
+                size_t ActualSize   = LayerSize[OutLayer];
+                printf("----Back Propagation----RGW[%zu]----Layer[%zu][%zu]=%.12f----\n", InLayer, InLayer, j, Layer[InLayer][j]);
+                
+                for (size_t dim=0; dim<OutBlockDim; ++dim) {
+                    printf("RGLayer[%zu][0:%zu]=(", OutLayer, NumOutBlocks-1);
+                    for (size_t blk=0; blk<NumOutBlocks; ++blk) {
+                        size_t pos = blk*OutBlockDim + dim;
+                        if (pos < ActualSize) {
+                            printf("[%zu]=%.12f", pos, RGLayer[OutLayer][pos]);
+                            if (blk<NumBlocks-1) printf(", ");
+                        }
+                        else printf("0, ");
+                    }
+                    printf(") | RGW[%zu][%zu][0:%zu]=(", InLayer, j, NumOutBlocks-1);
+                    for (size_t blk=0; blk<NumOutBlocks; ++blk) {
+                        size_t pos = blk*OutBlockDim + dim;
+                        if (pos < ActualSize) {
+                            printf("[%zu]=%.12f", pos, RGW[InLayer][j*ActualSize+pos]);
+                            if (blk<NumBlocks-1) printf(", ");
+                        }
+                        else printf("0, ");
+                    }
+                    printf(")\n");
+                }
+                }
             }
 
+/*
             if (i<3) {
                 // For Hardware Debug - Print RG_Layer
                 size_t layer = i-1;
@@ -997,7 +1029,7 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                     printf(")\n");
                 }
             }
-
+*/
             
             
         }
@@ -1438,7 +1470,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     }
     
     // Number of Cycles to Run - Total
-    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + FVPLength + 100;
+    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + FVPLength + 500;
 
     // Allocation Memory Space for FVP Result
     double * FVPResult = (double *) calloc(FVPLength, sizeof(double));
@@ -1459,25 +1491,35 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     max_unload(engine);
     TRPO_free();
 
+
+    // Print FVP Results
+    FILE *ResultFilePointer = fopen("FVPResultRAW.txt", "w");
+    if(ResultFilePointer == NULL) fprintf(stderr, "[ERROR] Open Output File Failed.\n");
+    for (size_t i=0; i<FVPLength; ++i) {
+        fprintf(ResultFilePointer, "FVPResult[%4zu] = % 014.12f\n", i, FVPResult[i]);
+    }
+    fclose(ResultFilePointer);
+    
+
     // Read FVP into Result
     pos = 0;
     size_t FVPPos = 0;
     for (size_t i=0; i<NumLayers-1; ++i) {
-        size_t  curLayerDimPadded = PaddedLayerSize[i];
-        size_t nextLayerDimPadded = PaddedLayerSize[i+1];
-        size_t  curLayerDimReal   = LayerSize[i];
-        size_t nextLayerDimReal   = LayerSize[i+1];
-        for (size_t j=0; j<curLayerDimPadded; ++j) {
-            for (size_t k=0; k<nextLayerDimPadded; ++k) {
-                if ( (j<curLayerDimReal) && (k<nextLayerDimReal) ) {
+        size_t  curLayerSizePadded = PaddedLayerSize[i];
+        size_t nextLayerSizePadded = PaddedLayerSize[i+1];
+        size_t  curLayerSizeReal   = LayerSize[i];
+        size_t nextLayerSizeReal   = LayerSize[i+1];
+        for (size_t j=0; j<curLayerSizePadded; ++j) {
+            for (size_t k=0; k<nextLayerSizePadded; ++k) {
+                if ( (j<curLayerSizeReal) && (k<nextLayerSizeReal) ) {
                     Result[pos] = FVPResult[FVPPos];
                     pos++;
                 }
                 FVPPos++;
             }
         }
-        for (size_t k=0; k<nextLayerDimPadded; ++k) {
-            if (k<nextLayerDimReal) {
+        for (size_t k=0; k<nextLayerSizePadded; ++k) {
+            if (k<nextLayerSizeReal) {
                 Result[pos] = FVPResult[FVPPos];
                 pos++;
             }
@@ -1776,8 +1818,8 @@ void AntTestFPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 10;           // Note that thre are 50007 items
-    Param.CG_Damping        = 0.1;
+    Param.NumSamples        = 1;           // Note that thre are 50007 items
+    Param.CG_Damping        = 0;
 
     // Open Simulation Data File that contains test data
     FILE *DataFilePointer = fopen(FVPFileName, "r");
@@ -1816,9 +1858,18 @@ void AntTestFPGA() {
         double cur_err = abs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100;
     	if (CPU_output[i] != 0) percentage_err += cur_err;
     	if (cur_err>0.1) {
-//    	    printf("FVP_FPGA[%zu]=%e, FVP_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
+    	    printf("FVP_FPGA[%zu]=%e, FVP_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
     	}
     }
+    
+    // Print Results
+    FILE *ResultFilePointer = fopen("result.txt", "w");
+    if(ResultFilePointer == NULL) fprintf(stderr, "[ERROR] Open Output File Failed.\n");
+    for (size_t i=0; i<NumParams; ++i) {
+        fprintf(ResultFilePointer, "CPU_output[%4zu] = % 014.12f, FPGA_output[%4zu] = % 014.12f\n", i, CPU_output[i], i, FPGA_output[i]);
+    }
+    fclose(ResultFilePointer);
+    
     percentage_err = percentage_err / (double)NumParams;
     printf("--------------------------- Swimmer Test ----------------------------\n");
     printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
