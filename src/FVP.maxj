@@ -89,11 +89,13 @@ class FVP extends KernelLib{
     /////////////////////// Types ///////////////////////
 
     // Type of each layer
-    DFEVectorType<DFEVar> Y0_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[0]);
-    DFEVectorType<DFEVar> Y1_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[1]);
-    DFEVectorType<DFEVar> Y2_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[2]);
-    DFEVectorType<DFEVar> Y3_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[3]);
-
+    DFEVectorType<DFEVar>  Y0_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[0]);
+    DFEVectorType<DFEVar>  Y1_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[1]);
+    DFEVectorType<DFEVar>  Y2_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[2]);
+    DFEVectorType<DFEVar>  Y3_Type = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[3]);
+    DFEVectorType<DFEVar> RG1_Type = new DFEVectorType<DFEVar>(Def.RGType, NumBlocks[1]);
+    DFEVectorType<DFEVar> RG2_Type = new DFEVectorType<DFEVar>(Def.RGType, NumBlocks[2]);
+    DFEVectorType<DFEVar> RG3_Type = new DFEVectorType<DFEVar>(Def.RGType, NumBlocks[3]);
 
     /////////////////////// Total Counter ///////////////////////
 
@@ -263,7 +265,7 @@ class FVP extends KernelLib{
     int Bwd_Fst_CycleTime = Math.max(BlockDim[0], BlockDim[2]);
     DFEVector<DFEVar> Bwd_y_0_Fst = Buffer0.getBwdData();
     DFEVector<DFEVar> Bwd_y_1     = Y1_Type.newInstance(this);
-    DFEVector<DFEVar> Bwd_RG_1    = Y1_Type.newInstance(this);
+    DFEVector<DFEVar> Bwd_RG_1    = RG1_Type.newInstance(this);
     DFEVar beginBwdPropFst = dfeUInt(1).newInstance(this);    
 
     Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], Bwd_Fst_CycleTime,
@@ -310,7 +312,7 @@ class FVP extends KernelLib{
     // Inputs for Back Propagation
     DFEVector<DFEVar> Bwd_y_1_Snd = FwdBuf1.getBwdY();
     DFEVector<DFEVar> Bwd_y_2     = Y2_Type.newInstance(this);
-    DFEVector<DFEVar> Bwd_RG_2    = Y2_Type.newInstance(this);
+    DFEVector<DFEVar> Bwd_RG_2    = RG2_Type.newInstance(this);
     DFEVar beginBwdPropSnd        = dfeUInt(1).newInstance(this);
 
     MidLayer SndLayer = new MidLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2], Fwd_Snd_CycleTime,
@@ -376,7 +378,7 @@ class FVP extends KernelLib{
     int Bwd_Trd_CycleTime = BlockDim[2];
     DFEVector<DFEVar> Bwd_y_2_Trd = FwdBuf2.getBwdY();
     DFEVector<DFEVar> Bwd_y_3     = Y3_Type.newInstance(this);
-    DFEVector<DFEVar> Bwd_RG_3    = Y3_Type.newInstance(this);
+    DFEVector<DFEVar> Bwd_RG_3    = RG3_Type.newInstance(this);
     DFEVar beginBwdPropTrd        = beginBwdProp;
     
     Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], Bwd_Trd_CycleTime,
@@ -422,7 +424,7 @@ class FVP extends KernelLib{
     DFEVector<DFEVar> StdSqInv = StdBuff.getStd();
     
     // Calculate RG_3
-    DFEVector<DFEVar> RG_3_toBuffer = StdSqInv * Ry_3_toBuffer;
+    DFEVector<DFEVar> RG_3_toBuffer = StdSqInv.cast(RG3_Type) * Ry_3_toBuffer.cast(RG3_Type);
 
     // Layer Buffer: Buffering y_3 and RG_3
     // Here we are using the forward propagation functionality of the buffer to buffer the back propagation data
@@ -465,10 +467,11 @@ class FVP extends KernelLib{
     // Tick
     DFEVar Tick = control.count.simpleCounter(32);
 
-    debug.simPrintf(beginInit,     "[%4d] ---- Begin Initialisation ----\n", Tick);
-    debug.simPrintf(beginFwdProp,  "[%4d] ---- Begin Fwd Prop Sample [%d] ------------------------------------\n", Tick, OuterLoopCount);
-    debug.simPrintf(beginBwdProp,  "[%4d] ------------------------------------ Begin Bwd Prop Sample [%d] ----\n", Tick, OuterLoopCount-1);
-    debug.simPrintf(beginReadBack, "[%4d] ---- Begin Read Back FVP Results ----\n", Tick);
+    debug.simPrintf(beginInit,     "[%4d] Begin Initialisation...\n", Tick);
+    debug.simPrintf(beginFVPCalc,  "[%4d] Begin Fisher Vector Product (FVP) Computation...\n", Tick);
+//    debug.simPrintf(beginFwdProp,  "[%4d] ---- Begin Fwd Prop Sample [%d] ------------------------------------\n", Tick, OuterLoopCount);
+//    debug.simPrintf(beginBwdProp,  "[%4d] ------------------------------------ Begin Bwd Prop Sample [%d] ----\n", Tick, OuterLoopCount-1);
+    debug.simPrintf(beginReadBack, "[%4d] Begin Reading Back FVP Results...\n", Tick);
     
 //    debug.simPrintf(TrdLayer.isFwdFirstItemReady(), "[%4d] First Third Layer Forward Propagation Output is ready.\n", Tick);
 //    debug.simPrintf(TrdLayer.isFwdValid(), "[%4d] y[0:3]=(%.12f, %.12f, %.12f, %.12f), Ry[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, y_3_toBuffer[0], y_3_toBuffer[1], y_3_toBuffer[2], y_3_toBuffer[3], Ry_3_toBuffer[0], Ry_3_toBuffer[1], Ry_3_toBuffer[2], Ry_3_toBuffer[3]);

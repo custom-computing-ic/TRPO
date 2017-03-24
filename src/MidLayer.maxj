@@ -11,7 +11,6 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Stream.OffsetExpr;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Accumulator;
-import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
 import maxpower.KernelBinaryOp.Add;
@@ -125,10 +124,18 @@ class MidLayer extends KernelLib{
     /////////////////////// Data Types ///////////////////////
     
     int BlockSize = InBlockDim*OutBlockDim;
-    DFEVectorType<DFEVar>  InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
-    DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
+    DFEVectorType<DFEVar>  InVecType    = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
+    DFEVectorType<DFEVar> OutVecType    = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);    
+    DFEVectorType<DFEVar>  InVecType_y  = new DFEVectorType<DFEVar>(Def.yType,    NumInBlocks);
+    DFEVectorType<DFEVar>  InVecType_Ry = new DFEVectorType<DFEVar>(Def.RyType,   NumInBlocks);
+    DFEVectorType<DFEVar> OutVecType_y  = new DFEVectorType<DFEVar>(Def.yType,    NumOutBlocks);
+    DFEVectorType<DFEVar> OutVecType_Ry = new DFEVectorType<DFEVar>(Def.RyType,   NumOutBlocks);
+    DFEVectorType<DFEVar>  RGVecType    = new DFEVectorType<DFEVar>(Def.RGType,   NumInBlocks);
+    DFEVectorType<DFEVar> AccVecType    = new DFEVectorType<DFEVar>(Def.AccType,  NumOutBlocks);
+    DFEVectorType<DFEVar> RGWVecType    = new DFEVectorType<DFEVar>(Def.RGWType,  NumOutBlocks);
+    DFEVectorType<DFEVar> RGBVecType    = new DFEVectorType<DFEVar>(Def.RGBType,  NumOutBlocks);
     DFEVectorType<DFEVector<DFEVar>> FwdGridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
-    DFEVectorType<DFEVector<DFEVar>> BwdGridVecType = new DFEVectorType<DFEVector<DFEVar>>(OutVecType, NumInBlocks);
+    DFEVectorType<DFEVector<DFEVar>> BwdGridVecType = new DFEVectorType<DFEVector<DFEVar>>(RGWVecType, NumInBlocks);
     DFEType AddrType = dfeUInt(Math.max(MathUtils.bitsToAddress(BlockSize),1));
 
 
@@ -426,7 +433,8 @@ class MidLayer extends KernelLib{
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // W Block
             Memory<DFEVar> WBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
-            BwdWGridVec[X][Y] <== WBlock.port(WPortAddr, FwdPrevLayer[X], isInitW & (Y===InitWYCount), RamWriteMode.WRITE_FIRST);
+            DFEVar PortData = WBlock.port(WPortAddr, FwdPrevLayer[X], isInitW & (Y===InitWYCount), RamWriteMode.WRITE_FIRST);
+            BwdWGridVec[X][Y] <== PortData.cast(Def.RGWType);
             FwdWGridVec[Y][X] <== WBlock.read(WReadAddr);
             // VW Block
             Memory<DFEVar> VWBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
@@ -457,20 +465,20 @@ class MidLayer extends KernelLib{
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // RGW Block
-            Memory<DFEVar> RGWBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
+            Memory<DFEVar> RGWBlock = mem.alloc(Def.RGWType, Math.max(BlockSize,2));
             RGWBlock.port(BwdRGWWrAddr, BwdRGWWrGridVec[X][Y], BwdRGWWrEn, RamWriteMode.WRITE_FIRST);
             BwdRGWRdGridVec[X][Y] <== RGWBlock.read(RGWReadAddr);
         }
     }
     
     // RGB Memory Blocks
-    DFEVector<DFEVar> BwdRGBRead  = OutVecType.newInstance(this);
-    DFEVector<DFEVar> BwdRGBWrite = OutVecType.newInstance(this);
+    DFEVector<DFEVar> BwdRGBRead  = RGBVecType.newInstance(this);
+    DFEVector<DFEVar> BwdRGBWrite = RGBVecType.newInstance(this);
     DFEVar BwdRGBWrAddr = dfeUInt(Math.max(MathUtils.bitsToAddress(OutBlockDim),1)).newInstance(this);
     DFEVar BwdRGBWrEn   = dfeUInt(1).newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // RGB Block
-        Memory<DFEVar> RGBBlock = mem.alloc(Def.DataType, Math.max(OutBlockDim,2));
+        Memory<DFEVar> RGBBlock = mem.alloc(Def.RGBType, Math.max(OutBlockDim,2));
         RGBBlock.port(BwdRGBWrAddr, BwdRGBWrite[Y], BwdRGBWrEn, RamWriteMode.WRITE_FIRST);
         BwdRGBRead[Y] <== RGBBlock.read(RGBReadAddr);
     }
@@ -486,26 +494,29 @@ class MidLayer extends KernelLib{
     /////////////////////// Calculation - Forward Propagation ///////////////////////
 
     // Calculate Pre-activated Y and Ry
-    // TODO: Optimise bit width to avoid overflow
-    DFEVector<DFEVar> Temp_y  = OutVecType.newInstance(this);
-    DFEVector<DFEVar> Temp_Ry = OutVecType.newInstance(this);
-    DFEVector<DFEVar> NewPreAc_y  = OutVecType.newInstance(this);
-    DFEVector<DFEVar> NewPreAc_Ry = OutVecType.newInstance(this);
+    DFEVector<DFEVar> Temp_y      = AccVecType.newInstance(this);
+    DFEVector<DFEVar> Temp_Ry     = AccVecType.newInstance(this);
+    DFEVector<DFEVar> NewPreAc_y  = AccVecType.newInstance(this);
+    DFEVector<DFEVar> NewPreAc_Ry = AccVecType.newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
+        // Calculate Multiplication with DataType
         DFEVector<DFEVar> mult_y  =   FwdPrevLayer * FwdWGridVec[Y];
         DFEVector<DFEVar> mult_Ry = FwdPrevRyLayer * FwdWGridVec[Y] + FwdPrevLayer * FwdVWGridVec[Y];
-        DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(), mult_y.getElementsAsList());
-        DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry.getElementsAsList());
-        NewPreAc_y[Y]  <== MultAdd_y  + (isFirstRow ?  Bias[Y] : Temp_y[Y]);
-        NewPreAc_Ry[Y] <== MultAdd_Ry + (isFirstRow ? VBias[Y] : Temp_Ry[Y]);
+        // Cast Multiplication Result into AccType for Accumulation
+        DFEVector<DFEVar>  mult_y_Acc =  mult_y.cast(new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks));
+        DFEVector<DFEVar> mult_Ry_Acc = mult_Ry.cast(new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks));        
+        DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(),  mult_y_Acc.getElementsAsList());
+        DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry_Acc.getElementsAsList());
+        // Cast Bias and VBias into AccType to derive pre-activated value
+        NewPreAc_y[Y]  <== MultAdd_y  + (isFirstRow ?  Bias[Y].cast(Def.AccType) : Temp_y[Y]);
+        NewPreAc_Ry[Y] <== MultAdd_Ry + (isFirstRow ? VBias[Y].cast(Def.AccType) : Temp_Ry[Y]);
     }
 
     // Prepare Write Back Data
     OffsetExpr Offset_y  = stream.makeOffsetAutoLoop("MidLayer"+ID+"Offset_y");
     OffsetExpr Offset_Ry = stream.makeOffsetAutoLoop("MidLayer"+ID+"Offset_Ry");
-     
-    DFEVector<DFEVar> TempWrData_y = OutVecType.newInstance(this);
-    DFEVector<DFEVar> TempWrData_Ry = OutVecType.newInstance(this);
+    DFEVector<DFEVar> TempWrData_y  = AccVecType.newInstance(this);
+    DFEVector<DFEVar> TempWrData_Ry = AccVecType.newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         TempWrData_y[Y]  <== stream.offset(NewPreAc_y[Y],  -Offset_y);
         TempWrData_Ry[Y] <== stream.offset(NewPreAc_Ry[Y], -Offset_Ry);
@@ -519,11 +530,11 @@ class MidLayer extends KernelLib{
     // Temp Result of y and Ry
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // Temp y
-        Memory<DFEVar> BRAM_y = mem.alloc(Def.DataType, Math.max(OutBlockDim,2));
+        Memory<DFEVar> BRAM_y = mem.alloc(Def.AccType, Math.max(OutBlockDim,2));
         Temp_y[Y] <== BRAM_y.read(FwdColAddr);
         BRAM_y.port(TempWrAddr_y, TempWrData_y[Y], TempWrEn_y, RamWriteMode.WRITE_FIRST);
         // Temp Ry
-        Memory<DFEVar> BRAM_Ry = mem.alloc(Def.DataType, Math.max(OutBlockDim,2));
+        Memory<DFEVar> BRAM_Ry = mem.alloc(Def.AccType, Math.max(OutBlockDim,2));
         Temp_Ry[Y] <== BRAM_Ry.read(FwdColAddr);
         BRAM_Ry.port(TempWrAddr_Ry, TempWrData_Ry[Y], TempWrEn_Ry, RamWriteMode.WRITE_FIRST);
     }
@@ -532,17 +543,19 @@ class MidLayer extends KernelLib{
     // Apply Activation Function
     YVec  = OutVecType.newInstance(this);
     RyVec = OutVecType.newInstance(this);
+    // Cast Activated Result Back into DataType for next layer
+    // TODO Ry may overflow    
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         switch (AcFunc) {
             case 't': {
-                DFEVar Activated_y = Def.tanh(NewPreAc_y[Y]);
+                DFEVar Activated_y = Def.tanh(NewPreAc_y[Y]).cast(Def.DataType);
                  YVec[Y] <== Activated_y;
-                RyVec[Y] <== NewPreAc_Ry[Y] * (1-Activated_y) * (1+Activated_y);
+                RyVec[Y] <== NewPreAc_Ry[Y].cast(Def.DataType) * (1-Activated_y) * (1+Activated_y);
                 break;
             }
             case 'l': {
-                 YVec[Y] <== NewPreAc_y[Y];
-                RyVec[Y] <== NewPreAc_Ry[Y];
+                 YVec[Y] <== NewPreAc_y[Y].cast(Def.DataType);
+                RyVec[Y] <== NewPreAc_Ry[Y].cast(Def.DataType);
                 break;
             }
             default: {
@@ -550,6 +563,14 @@ class MidLayer extends KernelLib{
 			}
         }
     }
+
+    // For Number Representation Optimisation
+    // Check Minimum and Maximum values of Y and Ry
+    debug.simPrintf(beginReadBack, "Layer[%d] NewPreAc_y  Range = [%f, %f]\n", ID, Reductions.streamMin(NewPreAc_y), Reductions.streamMax(NewPreAc_y));
+    debug.simPrintf(beginReadBack, "Layer[%d] NewPreAc_Ry Range = [%f, %f]\n", ID, Reductions.streamMin(NewPreAc_Ry), Reductions.streamMax(NewPreAc_Ry));
+    debug.simPrintf(beginReadBack, "Layer[%d] RyVec       Range = [%f, %f]\n", ID, Reductions.streamMin(RyVec), Reductions.streamMax(RyVec));
+
+
 
 /*
     // For Simulation
@@ -571,34 +592,48 @@ class MidLayer extends KernelLib{
     BwdYVec = BwdPrevLayer;
 
     // Accumulator Parameter
-    Accumulator.Params BwdAccParam = Reductions.accumulator.makeAccumulatorConfig(Def.DataType)
+    Accumulator.Params BwdAccParam = Reductions.accumulator.makeAccumulatorConfig(Def.AccType)
                                                      .withEnable(isBwdCalculating)
                                                      .withClear(stream.offset(BwdColAddr, 1)===0);
 
     // De-Activation
-    DFEVector<DFEVar> RGLayer = OutVecType.newInstance(this);
+    DFEVector<DFEVar> RGLayer = (new DFEVectorType<DFEVar>(Def.RGType, NumOutBlocks)).newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         switch (AcFunc) {
-            case 't': {RGLayer[Y] <== BwdNextRGLayer[Y] * (1-BwdNextLayer[Y]*BwdNextLayer[Y]); break;}
-            case 'l': {RGLayer[Y] <== BwdNextRGLayer[Y]; break;}
+            // Calculate De-Activation in RGType
+            case 't': {
+                DFEVar nextLayerY = BwdNextLayer[Y].cast(Def.RGType);
+                RGLayer[Y] <== BwdNextRGLayer[Y] * (1-nextLayerY)*(1+nextLayerY);
+                break;
+            }
+            case 'l': {
+                RGLayer[Y] <== BwdNextRGLayer[Y];
+                break;
+            }
             default: {throw new IllegalArgumentException("Layer["+ID+"]: Activation Function "+AcFunc+" unsupported.");}    
         }
     }
 
     // Calculate RGVec when this layer isn't first layer
     // TODO: Optimise bit width to avoid overflow
-    RGVec = InVecType.newInstance(this);
-    DFEVector<DFEVar> thisStepMult = InVecType.newInstance(this);  // For Debug
+    RGVec = RGVecType.newInstance(this);
+    // For Debug  
+    DFEVector<DFEVar> thisStepMult = (new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks)).newInstance(this);
     if (ID==0) {
-        for (int X=0; X<NumInBlocks; ++X) RGVec[X] <== constant.var(Def.DataType, 0);
+        for (int X=0; X<NumInBlocks; ++X) RGVec[X] <== constant.var(Def.RGType, 0);
     }
     else {
         for (int X=0; X<NumInBlocks; ++X) {
-            DFEVector<DFEVar> mult_RG = RGLayer * BwdWGridVec[X];
-            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG.getElementsAsList());
+            // Calculate Multiplication in RGType
+            DFEVector<DFEVar> mult_RG = RGLayer * BwdWGridVec[X].cast(RGLayer.getType());
+            // Cast Multiplication Result into AccType for Accumulation
+            DFEVector<DFEVar> mult_RG_Acc = mult_RG.cast(new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks));
+            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG_Acc.getElementsAsList());
             DFEVar sum_RG = Reductions.accumulator.makeAccumulator(toAccumulator_RG, BwdAccParam);
-            RGVec[X] <== sum_RG;
-            thisStepMult[X] <== toAccumulator_RG;  // For Debug
+            // Cast Result into RGType
+            RGVec[X] <== sum_RG.cast(Def.RGType);
+            // For Debug
+            thisStepMult[X] <== toAccumulator_RG;
         }
     }
     
@@ -607,8 +642,11 @@ class MidLayer extends KernelLib{
     OffsetExpr Offset_RGW = stream.makeOffsetAutoLoop("Layer"+ID+"Offset_RGW");
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
-            DFEVar NewRGW = BwdRGWRdGridVec[X][Y] + BwdPrevLayer[X] * RGLayer[Y];
-            BwdRGWWrGridVec[X][Y] <== isInitW ? constant.var(Def.DataType, 0) : stream.offset(NewRGW, -Offset_RGW);
+            // Calculate Multiplication in RGType
+            DFEVar thisRGW = BwdPrevLayer[X].cast(Def.RGType) * RGLayer[Y];
+            // Do Accumulation in RGW Type
+            DFEVar NewRGW  = BwdRGWRdGridVec[X][Y] + thisRGW.cast(Def.RGWType);
+            BwdRGWWrGridVec[X][Y] <== isInitW ? constant.var(Def.RGWType, 0) : stream.offset(NewRGW, -Offset_RGW);
         }
     }
     BwdRGWWrAddr <== isInitW ? InitWPortAddr : stream.offset(RGWReadAddr, -Offset_RGW);
@@ -617,11 +655,26 @@ class MidLayer extends KernelLib{
     // Calculate RGB
     OffsetExpr Offset_RGB = stream.makeOffsetAutoLoop("Layer"+ID+"Offset_RGB");
     for (int Y=0; Y<NumOutBlocks; ++Y) {
-        DFEVar NewRGB = BwdRGBRead[Y] + RGLayer[Y];
-        BwdRGBWrite[Y] <== isInitB ? constant.var(Def.DataType, 0) : stream.offset(NewRGB, -Offset_RGB);
+        // Do Addition in RGBType
+        DFEVar NewRGB = BwdRGBRead[Y] + RGLayer[Y].cast(Def.RGBType);
+        BwdRGBWrite[Y] <== isInitB ? constant.var(Def.RGBType, 0) : stream.offset(NewRGB, -Offset_RGB);
     }
     BwdRGBWrAddr <== isInitB ? InitBPortAddr : stream.offset(RGBReadAddr, -Offset_RGB);
     BwdRGBWrEn   <== isInitB | stream.offset(isRGBUpdating, -Offset_RGB);
+
+
+    // For Number Representation Optimisation
+    // Check Minimum and Maximum values of RGW and RGB
+    DFEVector<DFEVar> MinRGW = (new DFEVectorType<DFEVar>(Def.RGWType, NumInBlocks)).newInstance(this);
+    DFEVector<DFEVar> MaxRGW = (new DFEVectorType<DFEVar>(Def.RGWType, NumInBlocks)).newInstance(this);
+    for (int X=0; X<NumInBlocks; ++X) {
+        MinRGW[X] <== Reductions.streamMin(BwdRGWWrGridVec[X]);
+        MaxRGW[X] <== Reductions.streamMax(BwdRGWWrGridVec[X]);
+    }
+    debug.simPrintf(beginReadBack, "Layer[%d] RGW Range = [%f, %f]\n", ID, Reductions.streamMin(MinRGW), Reductions.streamMax(MaxRGW));
+    debug.simPrintf(beginReadBack, "Layer[%d] RGB Range = [%f, %f]\n", ID, Reductions.streamMin(BwdRGBWrite), Reductions.streamMax(BwdRGBWrite));
+
+
 
 
     // For Simulation
@@ -644,7 +697,7 @@ class MidLayer extends KernelLib{
 
 
     // RGW Read Back Data
-    DFEVector<DFEVar> RGWReadBackVec = InVecType.newInstance(this);
+    DFEVector<DFEVar> RGWReadBackVec = (new DFEVectorType<DFEVar>(Def.RGWType, NumInBlocks)).newInstance(this);
     for (int X=0; X<NumInBlocks; ++X) {
         RGWReadBackVec[X] <== control.mux(RGReadColBaseAddr, BwdRGWRdGridVec[X].getElementsAsList());
     }
@@ -654,7 +707,7 @@ class MidLayer extends KernelLib{
     DFEVar RGBReadBackData = control.mux(RGReadColBaseAddr, BwdRGBRead.getElementsAsList());
 
     // RG Read Back Data
-    RGReadBackData = isReadingBackRGW ? RGWReadBackData : RGBReadBackData;
+    RGReadBackData = isReadingBackRGW ? RGWReadBackData.cast(Def.ReadBackType) : RGBReadBackData.cast(Def.ReadBackType);
 
 
 	}

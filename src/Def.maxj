@@ -15,31 +15,49 @@ class Def {
 
     // Kernel Settings
     public static final int NumLayers     = 4;
-    public static final int NumSamples    = 10;
+    public static final int NumSamples    = 100;
     public static final int BufferDepth   = 2;
     public static final char [] AcFunc    = {'l', 't', 't', 'l'};
 
-/*
-    public static final int  [] LayerSize = {128, 64, 32, 8};
-    public static final int  [] NumBlocks = { 32,  8,  8, 4};
-*/
-    public static final int  [] LayerSize = { 32, 64, 64, 8};
-    public static final int  [] NumBlocks = {  4,  4,  4, 4};
+//    public static final int  [] LayerSize = { 32, 64, 64, 8};
+//    public static final int  [] NumBlocks = {  4,  4,  4, 4};
+    public static final int  [] LayerSize = {128, 64, 64, 8};
+    public static final int  [] NumBlocks = { 32,  4,  4, 4};
+    
+//    public static final int  [] LayerSize = {384,128, 64,20};
+//    public static final int  [] NumBlocks = { 32,  4,  4, 4};
+
 
 
     ///////////////////////// FPGA Settings /////////////////////////
         
-    public static final int KernelFrequencyMAX4 = 200;
+    public static final int KernelFrequencyMAX4 = 150;
 
 
     ///////////////////////// Data Types /////////////////////////
 
     // Input Type
     public static final DFEType InputType = KernelLib.dfeFloat(11, 53);
-
-    // Fix-Point Data Type
+    
+    // Number of Fractional Bits - affects accuracy
     public static final int FracBits = 40;
-    public static final DFEType DataType = KernelLib.dfeFixOffset(FracBits+14, -FracBits, SignMode.TWOSCOMPLEMENT);
+
+    // Fix-Point Data Type - 4 Integer Bits, range (-9, 8)
+    // Used for Observation, y, Weight, VWeight, Bias, VBias
+    public static final DFEType DataType = KernelLib.dfeFix(14, FracBits, SignMode.TWOSCOMPLEMENT);
+    
+    // Fix-Point Data Type of y and Ry
+    public static final DFEType  yType = DataType;
+    public static final DFEType RyType = KernelLib.dfeFix(14, FracBits, SignMode.TWOSCOMPLEMENT);
+    
+    // RG, RGW, RGB, ReadBackType
+    public static final DFEType RGType  = KernelLib.dfeFix(14, FracBits, SignMode.TWOSCOMPLEMENT);    
+    public static final DFEType RGWType = KernelLib.dfeFix(24, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType RGBType = KernelLib.dfeFix(24, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType ReadBackType = KernelLib.dfeFix(24, FracBits, SignMode.TWOSCOMPLEMENT);
+    
+    // For Accumulator
+    public static final DFEType AccType = KernelLib.dfeFix(24, FracBits, SignMode.TWOSCOMPLEMENT);    
 
 
     ///////////////////////// Software Utility Functions /////////////////////////

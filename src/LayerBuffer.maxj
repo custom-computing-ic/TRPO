@@ -1,7 +1,3 @@
-import java.lang.Math;
-import java.util.List;
-import java.util.ArrayList;
-
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
@@ -12,6 +8,10 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
 import maxpower.ConstDenominator;
+
+import java.lang.Math;
+import java.util.List;
+import java.util.ArrayList;
 
 /**
  * Buffer for Forward and Back Propagation.
@@ -88,6 +88,12 @@ class LayerBuffer extends KernelLib{
     }
 
 
+    /////////////////////// Types ///////////////////////
+
+    DFEType Type_y  =  YIn[0].getType();
+    DFEType Type_Ry = RyIn[0].getType();
+
+
     /////////////////////// Buffer ///////////////////////
 
     if (NumInBlocks > NumOutBlocks) {
@@ -121,27 +127,29 @@ class LayerBuffer extends KernelLib{
  		RWCollision = (FwdReadAddr === FwdWriteAddr) & FwdWriteValid;
 
         // Memory Block
-        DFEVectorType<DFEVar> ReadVecType = new DFEVectorType<DFEVar>(Def.DataType, NumBlocks);
-        DFEVector<DFEVar> FwdYReadVec = ReadVecType.newInstance(this);
-        DFEVector<DFEVar> BwdYReadVec = ReadVecType.newInstance(this);
-        DFEVector<DFEVar> RyReadVec = ReadVecType.newInstance(this);
+        DFEVectorType<DFEVar> ReadVecType_y  = new DFEVectorType<DFEVar>(Type_y,  NumBlocks);
+        DFEVectorType<DFEVar> ReadVecType_Ry = new DFEVectorType<DFEVar>(Type_Ry, NumBlocks);
+        DFEVector<DFEVar> FwdYReadVec = ReadVecType_y.newInstance(this);
+        DFEVector<DFEVar> BwdYReadVec = ReadVecType_y.newInstance(this);
+        DFEVector<DFEVar> RyReadVec = ReadVecType_Ry.newInstance(this);
         for (int i=0; i<NumBlocks; ++i) {
             // Y
-            Memory<DFEVar> YBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
+            Memory<DFEVar> YBlock = mem.alloc(Type_y, Math.max(BlockSize,2));
             YBlock.port(FwdWriteAddr, YIn[i], FwdWriteValid, RamWriteMode.WRITE_FIRST);
             FwdYReadVec[i] <== YBlock.read(FwdReadAddr);
             BwdYReadVec[i] <== YBlock.read(BwdReadAddr);
             // Ry
-            Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
+            Memory<DFEVar> RyBlock = mem.alloc(Type_Ry, Math.max(BlockSize,2));
             RyBlock.port(FwdWriteAddr, RyIn[i], FwdWriteValid, RamWriteMode.WRITE_FIRST);
             RyReadVec[i] <== RyBlock.read(FwdReadAddr);
         }
         
         // Output Vector
-        DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
-        FwdYVec = OutVecType.newInstance(this);
-        BwdYVec = OutVecType.newInstance(this);
-          RyVec = OutVecType.newInstance(this);
+        DFEVectorType<DFEVar> OutVecType_y  = new DFEVectorType<DFEVar>(Type_y,  NumOutBlocks);
+        DFEVectorType<DFEVar> OutVecType_Ry = new DFEVectorType<DFEVar>(Type_Ry, NumOutBlocks);
+        FwdYVec = OutVecType_y.newInstance(this);
+        BwdYVec = OutVecType_y.newInstance(this);
+          RyVec = OutVecType_Ry.newInstance(this);
         for (int i=0; i<NumOutBlocks; ++i) {
             List<DFEVar>  FwdYReadtoMux = new ArrayList<DFEVar>(MuxWidth);
             List<DFEVar>  BwdYReadtoMux = new ArrayList<DFEVar>(MuxWidth);
@@ -197,20 +205,21 @@ class LayerBuffer extends KernelLib{
         RWCollision = (FwdReadAddr === FwdWriteAddr) & FwdWriteDataValid;
 
         // Memory Block
-        DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
-         FwdYVec = OutVecType.newInstance(this);
-         BwdYVec = OutVecType.newInstance(this);
-           RyVec = OutVecType.newInstance(this);
+        DFEVectorType<DFEVar> OutVecType_y  = new DFEVectorType<DFEVar>(Type_y,  NumOutBlocks);
+        DFEVectorType<DFEVar> OutVecType_Ry = new DFEVectorType<DFEVar>(Type_Ry, NumOutBlocks);
+        FwdYVec = OutVecType_y.newInstance(this);
+        BwdYVec = OutVecType_y.newInstance(this);
+          RyVec = OutVecType_Ry.newInstance(this);
         for (int i=0; i<NumInBlocks; ++i) {
             for (int j=0; j<NumBlocksPerInput; ++j) {
                 DFEVar WriteValid = FwdWriteDataValid & (FwdBaseWrAddrCol === j);
                 // Y
-                Memory<DFEVar> YBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
+                Memory<DFEVar> YBlock = mem.alloc(Type_y, Math.max(BlockSize,2));
                 YBlock.port(FwdWriteAddr, YIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
                 FwdYVec[i*NumBlocksPerInput+j] <== YBlock.read(FwdReadAddr);
                 BwdYVec[i*NumBlocksPerInput+j] <== YBlock.read(BwdReadAddr);
                 // Ry
-                Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
+                Memory<DFEVar> RyBlock = mem.alloc(Type_Ry, Math.max(BlockSize,2));
                 RyBlock.port(FwdWriteAddr, RyIn[i], WriteValid, RamWriteMode.WRITE_FIRST);
                 RyVec[i*NumBlocksPerInput+j] <== RyBlock.read(FwdReadAddr);                
             }
@@ -243,18 +252,19 @@ class LayerBuffer extends KernelLib{
         RWCollision = (FwdReadAddr === FwdWriteAddr) & FwdWriteValid;
 
         // Memory Block
-        DFEVectorType<DFEVar> OutVecType = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
-         FwdYVec = OutVecType.newInstance(this);
-         BwdYVec = OutVecType.newInstance(this);
-           RyVec = OutVecType.newInstance(this);
+        DFEVectorType<DFEVar> OutVecType_y  = new DFEVectorType<DFEVar>(Type_y,  NumOutBlocks);
+        DFEVectorType<DFEVar> OutVecType_Ry = new DFEVectorType<DFEVar>(Type_Ry, NumOutBlocks);
+        FwdYVec = OutVecType_y.newInstance(this);
+        BwdYVec = OutVecType_y.newInstance(this);
+          RyVec = OutVecType_Ry.newInstance(this);
         for (int i=0; i<NumBlocks; ++i) {
             // Y
-            Memory<DFEVar> YBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
+            Memory<DFEVar> YBlock = mem.alloc(Type_y, Math.max(BlockSize,2));
             YBlock.port(FwdWriteAddr, YIn[i], FwdWriteValid, RamWriteMode.WRITE_FIRST);
             FwdYVec[i] <== RWCollision ? YIn[i] : YBlock.read(FwdReadAddr);
             BwdYVec[i] <== YBlock.read(BwdReadAddr);
             // Ry
-            Memory<DFEVar> RyBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
+            Memory<DFEVar> RyBlock = mem.alloc(Type_Ry, Math.max(BlockSize,2));
             RyBlock.port(FwdWriteAddr, RyIn[i], FwdWriteValid, RamWriteMode.WRITE_FIRST);
             RyVec[i] <== RWCollision ? RyIn[i] : RyBlock.read(FwdReadAddr);
         }

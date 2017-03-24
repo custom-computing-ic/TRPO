@@ -3,54 +3,14 @@
 #include <string.h>
 #include <math.h>
 
+#include "TRPO.h"
 #include "Maxfiles.h"
 #include "MaxSLiCInterface.h"
 
 
-typedef struct {
-
-    //////////////////// For CPU and FPGA ////////////////////
-
-    // Model Parameter File Name - weight, bias, std.
-    char * ModelFile;
-    
-    // Simulation Data File Name - probability and observation
-    char * DataFile;
-    
-    // Number of Layers in the network: [Input] --> [Hidden 1] --> [Hidden 2] --> [Output] is 4 layers.
-    size_t NumLayers;
-    
-    // Activation Function of each layer: 't' = tanh, 'l' = linear (y=x), 's' = sigmoid
-    // Activation Function used in the Final Layer in modular_rl: 'o' y = 0.1x
-    char * AcFunc;
-    
-    // Number of nodes in each layer: from [Input] to [Output]
-    // InvertedPendulum-v1: 4, 64, 64, 1
-    // Humanoid-v1: 376, 64, 64, 17    
-    size_t * LayerSize;
-    
-    // Number of Samples
-    size_t NumSamples;
-    
-    // Conjugate Gradient Damping Factor 
-    double CG_Damping;
-    
-    //////////////////// For FPGA Only ////////////////////
-    
-    // LayerSize used in FPGA, with stream padding
-    size_t * PaddedLayerSize;
-    
-    // Number of Blocks for Each Layer, i.e. Parallelism Factor
-    size_t * NumBlocks;
-    
-    
-    
-} TRPOparam;
-
-
+// Utility function calculating the number of trainable parameters
 size_t NumParamsCalc (size_t * LayerSize, size_t NumLayers) {
-
-    // Utility function calculating the number of trainable parameters
+    
     size_t NumParams = 0;
     for (size_t i=0; i<NumLayers-1; ++i) {
         // Weight and Bias
@@ -61,6 +21,11 @@ size_t NumParamsCalc (size_t * LayerSize, size_t NumLayers) {
     return NumParams;
 }
 
+// Utility Function Calculating the Max
+static inline double max(double record, double cur) {
+	double result = (record<fabs(cur)) ? fabs(cur) : record;
+	return result;
+}
 
 int FVP (TRPOparam param, double *Result, double *Input) 
 {
@@ -369,10 +334,6 @@ int FVP (TRPOparam param, double *Result, double *Input)
             GLayer[NumLayers-1][i] = 0;
             GStd[i] = 0;
         }
-        
-//        The two equation below is for the SimpleModel2-2-2
-//        GLayer[NumLayers-1][0] = Layer[NumLayers-1][0] - 0.01;
-//        GLayer[NumLayers-1][1] = Layer[NumLayers-1][1] - 0.99;
 
         // Backward Propagation
         for (size_t i=NumLayers-1; i>0; --i) {
@@ -1779,7 +1740,7 @@ void SwimmerCGTest()
 
 void AntTestFPGA() {
 
-
+/*
     // Swimmer-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {  8, 64, 64, 2};
@@ -1790,18 +1751,18 @@ void AntTestFPGA() {
     char * ModelFileName = "SwimmerTestModel.txt";
     char * DataFileName  = "SwimmerTestData.txt";
     char * FVPFileName   = "SwimmerTestFVP.txt";
+*/
 
-/*
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {111, 64, 32, 8};
-    size_t PaddedLayerSize [] = {128, 64, 32, 8};
-    size_t       NumBlocks [] = { 32,  8,  8, 4};
+    size_t PaddedLayerSize [] = {128, 64, 64, 8};
+    size_t       NumBlocks [] = { 32,  4,  4, 4};
 
     char * ModelFileName = "AntTestModel.txt";
     char * DataFileName  = "AntTestData.txt";
     char * FVPFileName   = "AntTestFVP.txt";
-*/
+
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;
@@ -1810,7 +1771,7 @@ void AntTestFPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 10;           // Note that thre are 50007 items
+    Param.NumSamples        = 100;           // Note that thre are 50007 items
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
@@ -1863,7 +1824,7 @@ void AntTestFPGA() {
     fclose(ResultFilePointer);
     
     percentage_err = percentage_err / (double)NumParams;
-    printf("--------------------------- Swimmer Test ----------------------------\n");
+    printf("--------------------------- AntTest FPGA ----------------------------\n");
     printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
