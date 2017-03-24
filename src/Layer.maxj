@@ -510,7 +510,7 @@ class Layer extends KernelLib{
         PrevAcY[Y] <== prevActivated_y;
         switch (AcFunc) {
             case 't': {
-                DFEVar Activated_y = tanh(prevActivated_y);
+                DFEVar Activated_y = Def.tanh(prevActivated_y);
                  YVec[Y] <== Activated_y;
                 RyVec[Y] <== prevActivated_Ry * (1-Activated_y) * (1+Activated_y);
                 break;
@@ -666,23 +666,7 @@ class Layer extends KernelLib{
 //if(ID==2)        debug.simPrintf(isReadingBackRGW, "[%4d] Reading RGW Block X=[%d] Y=[%d], Row=[%d] Col=[%d], BlockAddr=%d, RGW=%.12f\n", control.count.simpleCounter(32), RGReadRowBaseAddr, RGReadColBaseAddr, RGReadRowOffsetAddr, RGReadColOffsetAddr, RGWReadAddr, RGWReadBackData);
 
 
-
 	}
-
-
-
-    /////////////////////// Activation Functions ///////////////////////
-
-    // tanh() activation function
-    // Remarks: temporary workaround: Assign a suitable Data Type to avoid overflow
-    // TODO: final solution: use Function Approximation
-    private DFEVar tanh(DFEVar x) {
-        optimization.pushEnableBitGrowth(true);
-        DFEVar exp_2x = KernelMath.exp(2*x);
-        DFEVar result = (exp_2x - 1) / (exp_2x + 1);
-        optimization.popEnableBitGrowth();
-        return result.cast(Def.DataType);
-    }
 
 
 }

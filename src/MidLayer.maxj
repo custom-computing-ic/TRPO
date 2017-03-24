@@ -535,7 +535,7 @@ class MidLayer extends KernelLib{
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         switch (AcFunc) {
             case 't': {
-                DFEVar Activated_y = tanh(NewPreAc_y[Y]);
+                DFEVar Activated_y = Def.tanh(NewPreAc_y[Y]);
                  YVec[Y] <== Activated_y;
                 RyVec[Y] <== NewPreAc_Ry[Y] * (1-Activated_y) * (1+Activated_y);
                 break;
@@ -658,19 +658,6 @@ class MidLayer extends KernelLib{
 
 
 	}
-
-    /////////////////////// Activation Functions ///////////////////////
-
-    // tanh() activation function
-    // Remarks: temporary workaround: Assign a suitable Data Type to avoid overflow
-    // TODO: final solution: use Function Approximation
-    private DFEVar tanh(DFEVar x) {
-        optimization.pushEnableBitGrowth(true);
-        DFEVar exp_2x = KernelMath.exp(2*x);
-        DFEVar result = (exp_2x - 1) / (exp_2x + 1);
-        optimization.popEnableBitGrowth();
-        return result.cast(Def.DataType);
-    }
 
 
 }

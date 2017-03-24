@@ -1,6 +1,8 @@
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFix.SignMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
 import com.maxeler.maxcompiler.v2.utils.Bits;
 import java.util.List;
 import java.util.ArrayList;
@@ -53,6 +55,20 @@ class Def {
             encodedData.add(thisStepBits);
         }
         return encodedData;
+    }
+
+
+    /////////////////////// Activation Functions ///////////////////////
+
+    // tanh() activation function
+    // Remarks: temporary workaround: Assign a suitable Data Type to avoid overflow
+    // TODO: final solution: use Function Approximation
+    public static DFEVar tanh(DFEVar x) {
+        x.getKernel().optimization.pushEnableBitGrowth(true);
+        DFEVar exp_2x = KernelMath.exp(2*x);
+        DFEVar result = 1.0 - 2.0/(exp_2x+1.0);
+        x.getKernel().optimization.popEnableBitGrowth();
+        return result.cast(Def.DataType);
     }
 
 }
