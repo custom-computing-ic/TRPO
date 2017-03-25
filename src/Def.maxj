@@ -15,17 +15,17 @@ class Def {
 
     // Kernel Settings
     public static final int NumLayers     = 4;
-    public static final int NumSamples    = 100;
+    public static final int NumSamples    = 1000;
     public static final int BufferDepth   = 2;
     public static final char [] AcFunc    = {'l', 't', 't', 'l'};
 
 //    public static final int  [] LayerSize = { 32, 64, 64, 8};
 //    public static final int  [] NumBlocks = {  4,  4,  4, 4};
-    public static final int  [] LayerSize = {128, 64, 64, 8};
-    public static final int  [] NumBlocks = { 32,  4,  4, 4};
-    
-//    public static final int  [] LayerSize = {384,128, 64,20};
+//    public static final int  [] LayerSize = {128, 64, 64, 8};
 //    public static final int  [] NumBlocks = { 32,  4,  4, 4};
+    
+    public static final int  [] LayerSize = {384,128, 64, 20};
+    public static final int  [] NumBlocks = { 32,  4,  4,  4};
 
 
 
@@ -42,22 +42,25 @@ class Def {
     // Number of Fractional Bits - affects accuracy
     public static final int FracBits = 40;
 
-    // Fix-Point Data Type - 4 Integer Bits, range (-9, 8)
-    // Used for Observation, y, Weight, VWeight, Bias, VBias
-    public static final DFEType DataType = KernelLib.dfeFix(14, FracBits, SignMode.TWOSCOMPLEMENT);
+    // Fix-Point Data Type for Weight, VWeight, Bias, VBias, Std
+    public static final DFEType DataType = KernelLib.dfeFix(4, FracBits, SignMode.TWOSCOMPLEMENT);
     
     // Fix-Point Data Type of y and Ry
-    public static final DFEType  yType = DataType;
-    public static final DFEType RyType = KernelLib.dfeFix(14, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType  yType = KernelLib.dfeFix(4, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType RyType = KernelLib.dfeFix(9, FracBits, SignMode.TWOSCOMPLEMENT);
     
     // RG, RGW, RGB, ReadBackType
-    public static final DFEType RGType  = KernelLib.dfeFix(14, FracBits, SignMode.TWOSCOMPLEMENT);    
-    public static final DFEType RGWType = KernelLib.dfeFix(24, FracBits, SignMode.TWOSCOMPLEMENT);
-    public static final DFEType RGBType = KernelLib.dfeFix(24, FracBits, SignMode.TWOSCOMPLEMENT);
-    public static final DFEType ReadBackType = KernelLib.dfeFix(24, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType RGType  = KernelLib.dfeFix(10, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType RGWType = KernelLib.dfeFix(20, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType RGBType = KernelLib.dfeFix(20, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType ReadBackType = KernelLib.dfeFix(20, FracBits, SignMode.TWOSCOMPLEMENT);
     
     // For Accumulator
-    public static final DFEType AccType = KernelLib.dfeFix(24, FracBits, SignMode.TWOSCOMPLEMENT);    
+    public static final DFEType AccType = KernelLib.dfeFix(20, FracBits, SignMode.TWOSCOMPLEMENT);
+    
+    // For tanh() Activation Function
+    public static final DFEType AcInType = KernelLib.dfeFix(6, FracBits, SignMode.TWOSCOMPLEMENT);    
+    public static final DFEType AcOutType = KernelLib.dfeFix(12, FracBits, SignMode.TWOSCOMPLEMENT);
 
 
     ///////////////////////// Software Utility Functions /////////////////////////
@@ -79,14 +82,11 @@ class Def {
     /////////////////////// Activation Functions ///////////////////////
 
     // tanh() activation function
-    // Remarks: temporary workaround: Assign a suitable Data Type to avoid overflow
-    // TODO: final solution: use Function Approximation
+    // Remarks: Consider Function Approximation if hardware resource is very limited
     public static DFEVar tanh(DFEVar x) {
-        x.getKernel().optimization.pushEnableBitGrowth(true);
-        DFEVar exp_2x = KernelMath.exp(2*x);
+        DFEVar exp_2x = KernelMath.exp(2*x.cast(AcInType), AcOutType);
         DFEVar result = 1.0 - 2.0/(exp_2x+1.0);
-        x.getKernel().optimization.popEnableBitGrowth();
-        return result.cast(Def.DataType);
+        return result;
     }
 
 }

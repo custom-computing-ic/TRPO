@@ -36,7 +36,7 @@ class TRPOKernel extends Kernel {
     DFEVar EnObservationInput       = dfeUInt(1).newInstance(this);
     DFEVectorType<DFEVar> InVecType = new DFEVectorType<DFEVar>(Def.InputType, NumBlocks[0]);
     DFEVector<DFEVar> InVec         = io.input("Observation", InVecType, EnObservationInput);
-    DFEVector<DFEVar> Observation   = InVec.cast(new DFEVectorType<DFEVar>(Def.DataType, NumBlocks[0]));
+    DFEVector<DFEVar> Observation   = InVec.cast(new DFEVectorType<DFEVar>(Def.yType, NumBlocks[0]));
 
     // Bias and Std Input to Kernel - cast to fix point
     DFEVar EnBiasStdInput  = dfeUInt(1).newInstance(this);

@@ -1446,7 +1446,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     run_action.outstream_FVP        = FVPResult;
 
     // Run DFE
-    fprintf(stderr, "[INFO] Running on FPGA...\n");
+    fprintf(stderr, "[INFO] Running on FPGA for %zu cycles...\n", NumTicks);
     TRPO_RunTRPO_run(engine, &run_action);
     fprintf(stderr, "[INFO] Running on FPGA...Done\n");
 
@@ -1752,7 +1752,7 @@ void AntTestFPGA() {
     char * DataFileName  = "SwimmerTestData.txt";
     char * FVPFileName   = "SwimmerTestFVP.txt";
 */
-
+/*
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {111, 64, 32, 8};
@@ -1762,6 +1762,17 @@ void AntTestFPGA() {
     char * ModelFileName = "AntTestModel.txt";
     char * DataFileName  = "AntTestData.txt";
     char * FVPFileName   = "AntTestFVP.txt";
+*/
+
+    // Humanoid-v1
+    char            AcFunc [] = {'l', 't', 't', 'l'};
+    size_t       LayerSize [] = {376,128, 64,17};
+    size_t PaddedLayerSize [] = {384,128, 64,20};
+    size_t       NumBlocks [] = { 32,  4,  4, 4};
+
+    char * ModelFileName = "HumanoidTestModel.txt";
+    char * DataFileName  = "HumanoidTestData.txt";
+    char * FVPFileName   = "HumanoidTestFVP.txt";
 
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
@@ -1771,7 +1782,7 @@ void AntTestFPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 100;           // Note that thre are 50007 items
+    Param.NumSamples        = 1000;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
@@ -1824,8 +1835,8 @@ void AntTestFPGA() {
     fclose(ResultFilePointer);
     
     percentage_err = percentage_err / (double)NumParams;
-    printf("--------------------------- AntTest FPGA ----------------------------\n");
-    printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("--------------------------- FPGA Test ----------------------------\n");
+    printf("[INFO] Fisher Vector Product Average Percentage Error = %.12f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
 
