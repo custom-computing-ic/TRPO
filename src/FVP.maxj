@@ -46,7 +46,7 @@ class FVP extends KernelLib{
           int [] LayerSize,
           int [] NumBlocks,
           char [] AcFunc,
-          int NumSamples,
+          DFEVar NumSamples,
           DFEVector<DFEVar> Observation,
           DFEVar BiasStdInitData,
           DFEVar beginInit)
@@ -83,7 +83,6 @@ class FVP extends KernelLib{
     int FwdPropCyclesPerSample = BlockDim[0] + (BlockDim[1]-1)*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
     int BwdPropCyclesPerSample = BlockDim[1]*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
     int PropCyclesPerSample    = Math.max(FwdPropCyclesPerSample, BwdPropCyclesPerSample);
-    int PropCyclesTotal        = PropCyclesPerSample * NumSamples;
 
 
     /////////////////////// Types ///////////////////////
@@ -193,9 +192,15 @@ class FVP extends KernelLib{
     DFEVar FwdBufRowAddr = FwdBufRowAddrCount.cast(dfeUInt(1));
     DFEVar BwdBufRowAddr = ~FwdBufRowAddr;
 
-    // Forward Propagation Control
-    AddrGenerator FwdPropCounter = new AddrGenerator(this, 1, PropCyclesTotal, beginFVPCalc);
-    DFEVar isFwdCalculating = FwdPropCounter.isValid();
+    // Control Signal for Forward Propagation
+    Count.Params FwdPropCounterParam = control.count.makeParams(32)
+                                             .withInitValue(4294967295L)
+                                             .withMax(4294967295L)
+                                             .withReset(beginFVPCalc)
+                                             .withWrapMode(WrapMode.STOP_AT_MAX);
+    Counter FwdPropCounter = control.count.makeCounter(FwdPropCounterParam);
+    DFEVar FwdPropCount = FwdPropCounter.getCount();
+    DFEVar isFwdCalculating = beginFVPCalc | (FwdPropCount>0) & (FwdPropCount<PropCyclesPerSample*NumSamples);
     DFEVar beginFwdProp = (InnerLoopCount === 0) & isFwdCalculating;  
 
     // Control Signal for Back Propagation

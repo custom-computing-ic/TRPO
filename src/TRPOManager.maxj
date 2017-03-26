@@ -9,6 +9,8 @@ import com.maxeler.maxcompiler.v2.managers.engine_interfaces.EngineInterface.Dir
 import com.maxeler.maxcompiler.v2.managers.engine_interfaces.InterfaceParam;
 import com.maxeler.maxcompiler.v2.build.EngineParameters;
 
+import java.lang.Math;
+
 public class TRPOManager extends CustomManager{
 
     private static final String Name  = "TRPOKernel";
@@ -50,31 +52,30 @@ public class TRPOManager extends CustomManager{
 
         EngineInterface ei = new EngineInterface("RunTRPO");
 
-        // Number of ticks to run        
-        InterfaceParam NumTicks = ei.addParam("Ticks", CPUTypes.INT);
-        ei.setTicks(Name, NumTicks);
- 
-        
-        ///////////////////////// Observation /////////////////////////
-        
         // Parameters
         int NumLayers     = Def.NumLayers;
         int  [] LayerSize = Def.LayerSize;
         int  [] NumBlocks = Def.NumBlocks;
+        int  [] BlockDim  = new int[Def.NumLayers];
+        for (int i=0; i<NumLayers; ++i) BlockDim[i] = LayerSize[i] / NumBlocks[i];
 
+
+        ///////////////////////// Inputs /////////////////////////
+
+        // NumSamples
+        InterfaceParam NumSamples = ei.addParam("NumSamples", CPUTypes.UINT32);
+        ei.setScalar(Name, "NumSamples", NumSamples);
+        
         // Length of Weight and VWeight Initialisation Vector
         int WeightInitVecLength = 0;
         for (int i=0; i<NumLayers-1; ++i) {
-            WeightInitVecLength += 2*LayerSize[i]*LayerSize[i+1] / NumBlocks[i];
+            WeightInitVecLength += 2 * BlockDim[i] * LayerSize[i+1];
         }
         
         // Length of Observation Vector - Note that it's padded
-        int ObservVecLength = WeightInitVecLength + Def.NumSamples * Def.LayerSize[0] / NumBlocks[0];
-        int ObservVecSize   = CPUTypes.DOUBLE.sizeInBytes() * NumBlocks[0] * ObservVecLength;
+        InterfaceParam ObservVecLength = WeightInitVecLength + NumSamples * BlockDim[0];
+        InterfaceParam ObservVecSize   = CPUTypes.DOUBLE.sizeInBytes() * NumBlocks[0] * ObservVecLength;
         ei.setStream("Observation", CPUTypes.DOUBLE, ObservVecSize);
-
-
-        ///////////////////////// BiasStd /////////////////////////
         
         // Length of Bias, VBias and Std Stream
         int BiasStdVecLength = LayerSize[NumLayers-1];
@@ -95,7 +96,18 @@ public class TRPOManager extends CustomManager{
             FVPLength += LayerSize[i+1];
         }
         ei.setStream("FVP", CPUTypes.DOUBLE, CPUTypes.DOUBLE.sizeInBytes()*FVPLength);
-        
+
+
+        ///////////////////////// Ticks /////////////////////////
+
+        // Number of Ticks
+        int MaxBlkDim0Dim2 = Math.max(BlockDim[0], BlockDim[2]);
+        int FwdPropCyclesPerSample = BlockDim[0] + (BlockDim[1]-1)*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
+        int BwdPropCyclesPerSample = BlockDim[1]*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
+        int PropCyclesPerSample    = Math.max(FwdPropCyclesPerSample, BwdPropCyclesPerSample);
+        InterfaceParam NumTicks = WeightInitVecLength + PropCyclesPerSample*(NumSamples+1) + FVPLength + 20;
+        ei.setTicks(Name, NumTicks);
+
         return ei;
     }
 

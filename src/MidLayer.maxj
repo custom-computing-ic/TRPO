@@ -560,13 +560,14 @@ class MidLayer extends KernelLib{
         }
     }
 
+/*
     // For Number Representation Optimisation
     // Check Minimum and Maximum values of Y and Ry
     DFEVar beginReport = beginBwdProp;
     debug.simPrintf(beginReport, "Layer[%d] NewPreAc_y  Range = [%f, %f]\n", ID, Reductions.streamMin(NewPreAc_y), Reductions.streamMax(NewPreAc_y));
     debug.simPrintf(beginReport, "Layer[%d] NewPreAc_Ry Range = [%f, %f]\n", ID, Reductions.streamMin(NewPreAc_Ry), Reductions.streamMax(NewPreAc_Ry));
     debug.simPrintf(beginReport, "Layer[%d] RyVec       Range = [%f, %f]\n", ID, Reductions.streamMin(RyVec), Reductions.streamMax(RyVec));
-
+*/
 
 
 /*
@@ -658,6 +659,7 @@ class MidLayer extends KernelLib{
     BwdRGBWrEn   <== isInitB | stream.offset(isRGBUpdating, -Offset_RGB);
 
 
+/*
     // For Number Representation Optimisation
     // Check Minimum and Maximum values of RGW and RGB
     DFEVector<DFEVar> MinRGW = (new DFEVectorType<DFEVar>(Def.RGWType, NumInBlocks)).newInstance(this);
@@ -668,7 +670,7 @@ class MidLayer extends KernelLib{
     }
     debug.simPrintf(beginReport, "Layer[%d] RGW Range = [%f, %f]\n", ID, Reductions.streamMin(MinRGW), Reductions.streamMax(MaxRGW));
     debug.simPrintf(beginReport, "Layer[%d] RGB Range = [%f, %f]\n", ID, Reductions.streamMin(BwdRGBWrite), Reductions.streamMax(BwdRGBWrite));
-
+*/
 
 
 

@@ -15,7 +15,6 @@ class Def {
 
     // Kernel Settings
     public static final int NumLayers     = 4;
-    public static final int NumSamples    = 1000;
     public static final int BufferDepth   = 2;
     public static final char [] AcFunc    = {'l', 't', 't', 'l'};
 
@@ -59,9 +58,8 @@ class Def {
     public static final DFEType AccType = KernelLib.dfeFix(20, FracBits, SignMode.TWOSCOMPLEMENT);
     
     // For tanh() Activation Function
-    public static final DFEType AcInType = KernelLib.dfeFix(6, FracBits, SignMode.TWOSCOMPLEMENT);    
-    public static final DFEType AcOutType = KernelLib.dfeFix(12, FracBits, SignMode.TWOSCOMPLEMENT);
-
+    public static final DFEType AcInType  = KernelLib.dfeFix(6, FracBits, SignMode.TWOSCOMPLEMENT);
+    public static final DFEType AcExpType = KernelLib.dfeFix(23, FracBits, SignMode.UNSIGNED);
 
     ///////////////////////// Software Utility Functions /////////////////////////
 
@@ -83,9 +81,14 @@ class Def {
 
     // tanh() activation function
     // Remarks: Consider Function Approximation if hardware resource is very limited
-    public static DFEVar tanh(DFEVar x) {
-        DFEVar exp_2x = KernelMath.exp(2*x.cast(AcInType), AcOutType);
-        DFEVar result = 1.0 - 2.0/(exp_2x+1.0);
+    public static DFEVar tanh(DFEVar input) {
+        DFEVar x = input.cast(AcInType);
+        // Calculate tanh directly for [ , 7.96]
+        DFEVar tanh_1 = 1.0 - ( 2.0 / (KernelMath.exp(2*x, AcExpType)+1.0) ).cast(yType);
+        // Approx tanh with second order polynomial for [7.96, 9.6]
+        DFEVar tanh_2 = ((-0.000000186083688*x + 0.000003347719752)*x).cast(yType) + 0.999984906886171;
+        // Select Result
+        DFEVar result = (x<7.96) ? tanh_1 : ( (x<9.6) ? tanh_2 : 1);
         return result;
     }
 

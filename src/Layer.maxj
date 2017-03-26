@@ -492,8 +492,8 @@ class Layer extends KernelLib{
                                                      .withEnable(isFwdCalculating)
                                                      .withClear(stream.offset(FwdRowAddr, 1)===0);
     // For Debug
-    DFEVector<DFEVar> PrevAcY  = (new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks)).newInstance(this);
-    DFEVector<DFEVar> PrevAcRy = (new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks)).newInstance(this);
+//    DFEVector<DFEVar> PrevAcY  = (new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks)).newInstance(this);
+//    DFEVector<DFEVar> PrevAcRy = (new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks)).newInstance(this);
 
     // Calculate Y and Ry
     YVec  = (new DFEVectorType<DFEVar>(Def.yType,  NumOutBlocks)).newInstance(this);
@@ -519,8 +519,8 @@ class Layer extends KernelLib{
         DFEVar prevActivated_y  = sum_y  +  Bias[Y].cast(Def.AccType);
         DFEVar prevActivated_Ry = sum_Ry + VBias[Y].cast(Def.AccType);
         // For Debug
-        PrevAcY[Y]  <== prevActivated_y;
-        PrevAcRy[Y] <== prevActivated_Ry;
+//        PrevAcY[Y]  <== prevActivated_y;
+//        PrevAcRy[Y] <== prevActivated_Ry;
         // Cast Activated Result Back into yType and RyType for next layer
         switch (AcFunc) {
             case 't': {
@@ -540,13 +540,14 @@ class Layer extends KernelLib{
         }
     }
 
+/*
     // For Number Representation Optimisation
     // Check Minimum and Maximum values of Y and Ry
     DFEVar beginReport = beginBwdProp;
     debug.simPrintf(beginReport, "Layer[%d] PrevAcY  Range = [%f, %f]\n", ID, Reductions.streamMin(PrevAcY), Reductions.streamMax(PrevAcY));
     debug.simPrintf(beginReport, "Layer[%d] PrevAcRy Range = [%f, %f]\n", ID, Reductions.streamMin(PrevAcRy), Reductions.streamMax(PrevAcRy));
     debug.simPrintf(beginReport, "Layer[%d] RyVec    Range = [%f, %f]\n", ID, Reductions.streamMin(RyVec), Reductions.streamMax(RyVec));
-
+*/
 
 /*
     // For Simulation Debug
@@ -631,13 +632,13 @@ class Layer extends KernelLib{
         // Final Result
         RGVec = New_RG.cast(RGVecType);
 
-
+/*
     // For Number Representation Optimisation
     // Check Minimum and Maximum values of RG
     debug.simPrintf(beginReport, "Layer[%d] RGLayer Range = [%f, %f]\n", ID, Reductions.streamMin(RGLayer), Reductions.streamMax(RGLayer));
     debug.simPrintf(beginReport, "Layer[%d] New_RG  Range = [%f, %f]\n", ID, Reductions.streamMin(New_RG), Reductions.streamMax(New_RG));
     debug.simPrintf(beginReport, "Layer[%d] RGVec   Range = [%f, %f]\n", ID, Reductions.streamMin(RGVec), Reductions.streamMax(RGVec));
-
+*/
 
         // For Simulation
         // Debug - Checking De-Activation
@@ -676,6 +677,7 @@ class Layer extends KernelLib{
     BwdRGBWrEn   <== isInitB | stream.offset(isRGBUpdating, -Offset_RGB);
 
 
+/*
     // For Number Representation Optimisation
     // Check Minimum and Maximum values of RGW and RGB
     DFEVector<DFEVar> MinRGW = (new DFEVectorType<DFEVar>(Def.RGWType, NumInBlocks)).newInstance(this);
@@ -686,7 +688,7 @@ class Layer extends KernelLib{
     }
     debug.simPrintf(beginReport, "Layer[%d] RGW Range = [%f, %f]\n", ID, Reductions.streamMin(MinRGW), Reductions.streamMax(MaxRGW));
     debug.simPrintf(beginReport, "Layer[%d] RGB Range = [%f, %f]\n", ID, Reductions.streamMin(BwdRGBWrite), Reductions.streamMax(BwdRGBWrite));
-
+*/
 
 
     // For Simulation

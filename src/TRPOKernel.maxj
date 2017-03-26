@@ -15,7 +15,6 @@ class TRPOKernel extends Kernel {
     /////////////////////// Parameters ///////////////////////
     
     int NumLayers     = Def.NumLayers;
-    int NumSamples    = Def.NumSamples;
     int  [] LayerSize = Def.LayerSize;
     int  [] NumBlocks = Def.NumBlocks;
     char [] AcFunc    = Def.AcFunc;
@@ -31,6 +30,9 @@ class TRPOKernel extends Kernel {
     
 
     /////////////////////// Input ///////////////////////
+    
+    // Number of Samples - Scalar Input
+    DFEVar NumSamples = io.scalarInput("NumSamples", dfeUInt(32));
     
     // Observation Input to Kernel - cast to fix point
     DFEVar EnObservationInput       = dfeUInt(1).newInstance(this);

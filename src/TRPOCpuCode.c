@@ -1440,7 +1440,7 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
 
     // Init Advanced Static Interface
     TRPO_RunTRPO_actions_t run_action;
-    run_action.param_Ticks          = NumTicks;
+    run_action.param_NumSamples     = NumSamples;
     run_action.instream_Observation = Observation;
     run_action.instream_BiasStd     = BiasStd;
     run_action.outstream_FVP        = FVPResult;
@@ -1782,7 +1782,7 @@ void AntTestFPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 1000;
+    Param.NumSamples        = 10;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
