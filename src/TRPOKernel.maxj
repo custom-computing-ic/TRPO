@@ -4,6 +4,8 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 
+import maxpower.AspectChangeIO;
+
 class TRPOKernel extends Kernel {
 
     TRPOKernel(KernelParameters parameters)
@@ -37,7 +39,8 @@ class TRPOKernel extends Kernel {
     // Observation Input to Kernel - cast to fix point
     DFEVar EnObservationInput       = dfeUInt(1).newInstance(this);
     DFEVectorType<DFEVar> InVecType = new DFEVectorType<DFEVar>(Def.InputType, NumBlocks[0]);
-    DFEVector<DFEVar> InVec         = io.input("Observation", InVecType, EnObservationInput);
+    AspectChangeIO ObservInput = new AspectChangeIO(this, 3072);
+    DFEVector<DFEVar> InVec = ObservInput.input("Observation", InVecType, EnObservationInput);
     DFEVector<DFEVar> Observation   = InVec.cast(new DFEVectorType<DFEVar>(Def.yType, NumBlocks[0]));
 
     // Bias and Std Input to Kernel - cast to fix point

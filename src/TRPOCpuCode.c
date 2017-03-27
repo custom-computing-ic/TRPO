@@ -1314,10 +1314,14 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     }
 
     // Length of Observation Vector
-    // TODO Stream Padding if necessary
+    // Remarks: DRAM Write requires data bit-size to be a multiple of 384bytes
+    //          Namely, the number of items must be a multiple of 48
     size_t ObservVecLength = WeightInitVecLength + NumSamples*BlockDim[0];
-    size_t ObservVecWidth  = NumBlocks[0]; 
-    double * Observation = (double *) calloc(ObservVecLength*ObservVecWidth, sizeof(double));
+    size_t ObservVecWidth  = NumBlocks[0];
+    size_t ActualObservVecItems = ObservVecLength * ObservVecWidth;
+    size_t PaddedObservVecItems = (size_t) 48 * ceil( (double)ActualObservVecItems/48 );
+    fprintf(stderr, "[INFO] Observation Vector (%zu bytes) padded to %zu bytes\n", ActualObservVecItems*8, PaddedObservVecItems*8);
+    double * Observation = (double *) calloc(PaddedObservVecItems, sizeof(double));
     
     // Feed Weight and VWeight into Observation
     size_t RowNum = 0;
@@ -1414,6 +1418,16 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     }
 
 
+    //////////////////// FPGA - Init ////////////////////
+
+    TRPO_WriteDRAM_actions_t write_action;
+    write_action.param_start_bytes = 0;
+    write_action.param_size_bytes = PaddedObservVecItems * sizeof(double);
+    write_action.instream_fromCPU = Observation;
+    TRPO_WriteDRAM_run(engine, &write_action);
+    fprintf(stderr, "[INFO] Loading Model and Simulation Data...Done\n");
+
+
     //////////////////// FPGA - Run ////////////////////
     
     // Here we assume 4 layers
@@ -1439,15 +1453,15 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     double * FVPResult = (double *) calloc(FVPLength, sizeof(double));
 
     // Init Advanced Static Interface
-    TRPO_RunTRPO_actions_t run_action;
-    run_action.param_NumSamples     = NumSamples;
-    run_action.instream_Observation = Observation;
-    run_action.instream_BiasStd     = BiasStd;
-    run_action.outstream_FVP        = FVPResult;
+    TRPO_Run_actions_t run_action;
+    run_action.param_NumSamples           = NumSamples;
+    run_action.param_PaddedObservVecItems = PaddedObservVecItems;
+    run_action.instream_BiasStd           = BiasStd;
+    run_action.outstream_FVP              = FVPResult;
 
     // Run DFE
     fprintf(stderr, "[INFO] Running on FPGA for %zu cycles...\n", NumTicks);
-    TRPO_RunTRPO_run(engine, &run_action);
+    TRPO_Run_run(engine, &run_action);
     fprintf(stderr, "[INFO] Running on FPGA...Done\n");
 
     // Free Engine and Maxfile
@@ -1782,7 +1796,7 @@ void AntTestFPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 10;
+    Param.NumSamples        = 16;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
