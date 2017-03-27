@@ -29,7 +29,7 @@ static inline double max(double record, double cur) {
 	return result;
 }
 
-int FVP (TRPOparam param, double *Result, double *Input) 
+double FVP (TRPOparam param, double *Result, double *Input) 
 {
 
     //////////////////// Remarks ////////////////////
@@ -279,7 +279,11 @@ int FVP (TRPOparam param, double *Result, double *Input)
     
     
     //////////////////// Main Loop Over All Samples ////////////////////
-    
+
+    // Measure Elapsed Time
+    struct timeval tv1, tv2;
+    gettimeofday(&tv1, NULL);    
+
     for (size_t iter=0; iter<NumSamples; iter++) {
     
         //////////////////// Ordinary Forward Propagation ////////////////////
@@ -528,6 +532,11 @@ int FVP (TRPOparam param, double *Result, double *Input)
         Result[i] = Result[i] / (double)NumSamples;
         Result[i] += CG_Damping * Input[i];
     }
+    
+    // Report Computing Time
+    gettimeofday(&tv2, NULL);
+    double runtimeComp = ((tv2.tv_sec-tv1.tv_sec) * (double)1E6 + (tv2.tv_usec-tv1.tv_usec)) / (double)1E6;
+    printf("[INFO] FVP Computing Time is %f seconds.\n", runtimeComp);
 
 
     //////////////////// Clean Up ////////////////////  
@@ -546,11 +555,11 @@ int FVP (TRPOparam param, double *Result, double *Input)
     free(Observ); free(Mean); free(Std);
     free(AvgSampleMean); free(AvgSampleMeanSq);
 
-    return 0;
+    return runtimeComp;
 }
 
 
-int FVPFast (TRPOparam param, double *Result, double *Input)
+double FVPFast (TRPOparam param, double *Result, double *Input, size_t NumThreads)
 {
 
     //////////////////// Remarks ////////////////////
@@ -566,6 +575,9 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
 
 
     //////////////////// Read Parameters ////////////////////
+
+    // OpenMP Settings
+    omp_set_num_threads(NumThreads);
 
     // Assign Parameters
     const size_t NumLayers  = param.NumLayers;
@@ -758,7 +770,11 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
     
     
     //////////////////// Main Loop Over All Samples ////////////////////
-    
+
+    // Measure Elapsed Time
+    struct timeval tv1, tv2;
+    gettimeofday(&tv1, NULL);
+
     for (size_t iter=0; iter<NumSamples; iter++) {
     
         //////////////////// Combined Forward Propagation ////////////////////
@@ -772,20 +788,26 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
     
         // Forward Propagation
         for (size_t i=0; i<NumLayers-1; ++i) {
+
+            size_t CurrLayerSize = LayerSize[i];
+            size_t NextLayerSize = LayerSize[i+1];
+            size_t j, k;
             
             // Propagate from Layer[i] to Layer[i+1]
-            for (size_t j=0; j<LayerSize[i+1]; ++j) {
+//            #pragma omp parallel for private(j) shared(Layer, RxLayer, RyLayer, W, VW, B, VB) schedule(static, 16)
+            #pragma omp parallel for private(j, k)
+            for (j=0; j<NextLayerSize; ++j) {
                 
                 // Initialise x_j and R{x_j} in next layer
                 // Here we just use y_j's memory space to store x_j temoporarily
-                  Layer[i+1][j] =  B[i][j];
+                  Layer[i+1][j] = B[i][j];
                 RxLayer[i+1][j] = VB[i][j];
                 
-                for (size_t k=0; k<LayerSize[i]; ++k) {
+                for (k=0; k<CurrLayerSize; ++k) {
                     // From Neuron #k in Layer[i] to Neuron #j in Layer[i+1]
-                      Layer[i+1][j] +=   Layer[i][k] *  W[i][k*LayerSize[i+1]+j];
-                    RxLayer[i+1][j] += RyLayer[i][k] *  W[i][k*LayerSize[i+1]+j];
-                    RxLayer[i+1][j] +=   Layer[i][k] * VW[i][k*LayerSize[i+1]+j];
+                      Layer[i+1][j] +=   Layer[i][k] *  W[i][k*NextLayerSize+j];
+                    RxLayer[i+1][j] += RyLayer[i][k] *  W[i][k*NextLayerSize+j];
+                    RxLayer[i+1][j] +=   Layer[i][k] * VW[i][k*NextLayerSize+j];
                 }
             
                 // Calculate y_j and R{y_j} in next layer. Note that R{y_j} depends on y_j
@@ -816,40 +838,9 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                     // Default: Activation Function not supported
                     default: {
                         printf("[ERROR] AC Function for Layer[%zu] is %c. Unsupported.\n", i+1, AcFunc[i+1]);
-                        return -1;
                     }
                 }
-                
             }
-/*
-            // For Hardware Debug - Print
-            size_t NumBlocks = param.NumBlocks[i+1];
-            size_t ActualSize = LayerSize[i+1];
-            size_t BlockDim = (size_t) ceil( (double)ActualSize/(double)NumBlocks );
-            printf(">>>>>>>>>>>> Begin Sample [%zu] Layer [%zu] >>>>>>>>>>>>\n", iter, i+1);
-            for (size_t dim=0; dim<BlockDim; ++dim) {
-                printf("y[0:%zu]=(", NumBlocks-1);
-                for (size_t blk=0; blk<NumBlocks; ++blk) {
-                    size_t pos = blk*BlockDim + dim;
-                    if (pos < ActualSize) {
-                        printf("[%zu]=%.12f", pos, Layer[i+1][pos]);
-                        if (blk<NumBlocks-1) printf(", ");
-                    }
-                    else printf("0, ");
-                }
-
-                printf("), Ry[0:%zu]=(", NumBlocks-1);
-                for (size_t blk=0; blk<NumBlocks; ++blk) {
-                    size_t pos = blk*BlockDim + dim;
-                    if (pos < ActualSize) {
-                        printf("%.12f", RyLayer[i+1][pos]);
-                        if (blk<NumBlocks-1) printf(", ");
-                    }
-                    else printf("0, ");
-                }
-                printf(")\n");
-            }
-*/
         }
 
         // Check whether the forward propagation output is correct
@@ -860,34 +851,6 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
             if (err>0.1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
         }
 
-/*
-        // For Hardware Debug - Print Output Layer Values: y and Ry
-        size_t NumBlocks = param.NumBlocks[NumLayers-1];
-        size_t ActualSize = ActionSpaceDim;
-        size_t BlockDim = (size_t) ceil( (double)param.PaddedLayerSize[NumLayers-1]/(double)NumBlocks );
-        printf(">>>>>>>>>>>> Begin Sample [%zu] >>>>>>>>>>>>\n", iter);
-        for (size_t i=0; i<BlockDim; ++i) {
-            printf("y[0:%zu]=(", NumBlocks-1);
-            for (size_t j=0; j<NumBlocks; ++j) {
-                size_t pos = j*BlockDim + i;
-                if (pos < ActualSize) {
-                    printf("%.12f", Layer[NumLayers-1][pos]);
-                    if (j<NumBlocks-1) printf(", ");
-                }
-                else printf("0, ");
-            }
-            printf("), Ry[0:%zu]=(", NumBlocks-1);
-            for (size_t j=0; j<NumBlocks; ++j) {
-                size_t pos = j*BlockDim + i;
-                if (pos < ActualSize) {
-                    printf("%.12f", RyLayer[NumLayers-1][pos]);
-                    if (j<NumBlocks-1) printf(", ");
-                }
-                else printf("0, ");
-            }
-            printf(")\n");
-        }
-*/
 
         //////////////////// Pearlmutter Backward Propagation ////////////////////
 
@@ -896,14 +859,18 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
         // Calculating R{} Gradient of KL w.r.t. output values from the final layer, i.e. R{d(KL)/d(mean_i)}
         for (size_t i=0; i<ActionSpaceDim; ++i) {
             RGLayer[NumLayers-1][i] = RyLayer[NumLayers-1][i] / Std[i] / Std[i];
-//            printf("RGLayer[%zu][%zu]=%.12f\n", NumLayers-1, i, RGLayer[NumLayers-1][i]);
         }
 
         // Backward Propagation
         for (size_t i=NumLayers-1; i>0; --i) {
-       
+            
+            size_t CurrLayerSize = LayerSize[i];
+            size_t PrevLayerSize = LayerSize[i-1];
+            size_t j, k;
+
             // Propagate from Layer[i] to Layer[i-1]
-            for (size_t j=0; j<LayerSize[i]; ++j) {
+            #pragma omp parallel for private(j) shared(Layer, RGLayer, RGB) schedule(static, 16)            
+            for (j=0; j<CurrLayerSize; ++j) {
 
                 // Calculating R{} Gradient of KL w.r.t. pre-activated values in Layer[i], i.e. R{d(KL)/d(x_i)}
                 // Differentiate the activation function
@@ -919,7 +886,6 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
                     // Default: Activation Function not supported
                     default: {
                         fprintf(stderr, "[ERROR] AC Function for Layer [%zu] is %c. Unsupported.\n", i, AcFunc[i]);
-                        return -1;
                     }
                 }
 
@@ -928,75 +894,17 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
             }
 
             // Calculate the R{} derivative w.r.t. to Weight and the output values from Layer[i]
-            for (size_t j=0; j<LayerSize[i-1]; ++j) {
-                RGLayer[i-1][j] = 0;
-                for (size_t k=0; k<LayerSize[i]; ++k) {
+            #pragma omp parallel for private(j,k) shared(Layer, RGLayer, W, RGW) schedule(static, 16)
+            for (j=0; j<PrevLayerSize; ++j) {
+                double temp = 0;
+                for (k=0; k<CurrLayerSize; ++k) {
                     // The R{} Derivative w.r.t. to the weight from Neuron #j in Layer[i-1] to Neuron #k in Layer[i]
-                    RGW[i-1][j*LayerSize[i]+k] = Layer[i-1][j] * RGLayer[i][k];
+                    RGW[i-1][j*CurrLayerSize+k] = Layer[i-1][j] * RGLayer[i][k];
                     // Accumulate the Gradient from Neuron #k in Layer[i] to Neuron #j in Layer[i-1]
-                    RGLayer[i-1][j] += W[i-1][j*LayerSize[i]+k] * RGLayer[i][k];
-                    // For Debug
-//                    if (i==1 && j==0) printf("[k=%zu] W[%zu][%zu][%zu]=%.12f, RGLayer[%zu][%zu]=%.12f => RGLayer[%zu][%zu]=%.12f\n", k, i-1, j, k, W[i-1][j*LayerSize[i]+k], i, k, RGLayer[i][k], i-1, j, RGLayer[i-1][j]);
+                    temp += W[i-1][j*CurrLayerSize+k] * RGLayer[i][k];
                 }
-/*                
-                if (i==3) {
-                // For Hardware Debug - Print RGW Calculation
-                size_t OutLayer     = i;
-                size_t InLayer      = i-1;
-                size_t NumOutBlocks = param.NumBlocks[OutLayer];
-                size_t OutBlockDim  = (size_t) ceil( (double)param.PaddedLayerSize[OutLayer]/(double)NumOutBlocks );
-                size_t ActualSize   = LayerSize[OutLayer];
-                printf("----Back Propagation----RGW[%zu]----Layer[%zu][%zu]=%.12f----\n", InLayer, InLayer, j, Layer[InLayer][j]);
-                
-                for (size_t dim=0; dim<OutBlockDim; ++dim) {
-                    printf("RGLayer[%zu][0:%zu]=(", OutLayer, NumOutBlocks-1);
-                    for (size_t blk=0; blk<NumOutBlocks; ++blk) {
-                        size_t pos = blk*OutBlockDim + dim;
-                        if (pos < ActualSize) {
-                            printf("[%zu]=%.12f", pos, RGLayer[OutLayer][pos]);
-                            if (blk<NumBlocks-1) printf(", ");
-                        }
-                        else printf("0, ");
-                    }
-                    printf(") | RGW[%zu][%zu][0:%zu]=(", InLayer, j, NumOutBlocks-1);
-                    for (size_t blk=0; blk<NumOutBlocks; ++blk) {
-                        size_t pos = blk*OutBlockDim + dim;
-                        if (pos < ActualSize) {
-                            printf("[%zu]=%.12f", pos, RGW[InLayer][j*ActualSize+pos]);
-                            if (blk<NumBlocks-1) printf(", ");
-                        }
-                        else printf("0, ");
-                    }
-                    printf(")\n");
-                }
-                }
-*/                
-            }
-
-/*
-            if (i<3) {
-                // For Hardware Debug - Print RG_Layer
-                size_t layer = i-1;
-                size_t NumBlocks = param.NumBlocks[layer];
-                size_t ActualSize = LayerSize[layer];
-                size_t BlockDim = (size_t) ceil( (double)ActualSize/(double)NumBlocks );
-                printf("----Back Propagation----RG_Layer[%zu]\n", layer);
-                for (size_t dim=0; dim<BlockDim; ++dim) {
-                    printf("RG_%zu[0:%zu]=(", layer, NumBlocks-1);
-                    for (size_t blk=0; blk<NumBlocks; ++blk) {
-                        size_t pos = blk*BlockDim + dim;
-                        if (pos < ActualSize) {
-                            printf("[%zu]=%.12f", pos, RGLayer[layer][pos]);
-                            if (blk<NumBlocks-1) printf(", ");
-                        }
-                        else printf("0, ");
-                    }
-                    printf(")\n");
-                }
-            }
-*/
-            
-            
+                RGLayer[i-1][j] = temp;
+            }         
         }
         
         // Accumulate the Fisher-Vector Product to result
@@ -1025,11 +933,13 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
 
 
     // Averaging Fisher Vector Product over the samples and apply CG Damping
+    #pragma omp parallel for
     for (size_t i=0; i<pos; ++i) {
-        Result[i] = Result[i] / (double)NumSamples;
-        Result[i] += CG_Damping * Input[i];
+        Result[i] = Result[i] / (double)NumSamples + CG_Damping * Input[i];
     }
 
+    gettimeofday(&tv2, NULL);
+    double runtimeS = ((tv2.tv_sec-tv1.tv_sec) * (double)1E6 + (tv2.tv_usec-tv1.tv_usec)) / (double)1E6;
 
     //////////////////// Clean Up ////////////////////
 
@@ -1043,11 +953,11 @@ int FVPFast (TRPOparam param, double *Result, double *Input)
     }
     free(Observ); free(Mean); free(Std); free(VLogStd);
 
-    return 0;
+    return runtimeS;
 }
 
 
-int CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double ResidualTh)
+double CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double ResidualTh, size_t NumThreads)
 {
 
     //////////////////// Conjugate Gradient ////////////////////
@@ -1057,6 +967,9 @@ int CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double Residu
     //          b: Vector b in the equation Ax=b
     //    MaxIter: Maximum Iterations of Conjugate Gradient (in modular_rl is 10)
     // ResidualTh: Threshold of Residual (in modular_rl is 1e-10)
+
+    // OpenMP Settings
+    omp_set_num_threads(NumThreads);
 
     // Memory Allocation
     size_t NumParams = NumParamsCalc(param.LayerSize, param.NumLayers);
@@ -1074,12 +987,22 @@ int CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double Residu
     }
     
     // Iterative Solver
+
+    // Measure Elapsed Time
+    struct timeval tv1, tv2;
+    double ComptimeS = 0;
+    
     for (size_t iter=0; iter<=MaxIter; ++iter) {
 
         // Calculate Frobenius Norm of x
         double FrobNorm = 0;
-        for (size_t i=0; i<NumParams; ++i) FrobNorm += x[i] * x[i];
+        gettimeofday(&tv1, NULL);
+        #pragma omp parallel for reduction (+:FrobNorm)
+        for (size_t i=0; i<NumParams; ++i) {
+            FrobNorm += x[i] * x[i];
+        }
         FrobNorm = sqrt(FrobNorm);
+        gettimeofday(&tv2, NULL);
         printf("CG Iter[%zu] Residual Norm=%e, Soln Norm=%e\n", iter, rdotr, FrobNorm);
         
         // Check Termination Condition
@@ -1089,17 +1012,26 @@ int CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double Residu
         }
         
         // Calculate z = FIM*p
-        int FVPStatus = FVPFast(param, z, p);
-        if (FVPStatus!=0) {
+        double FVPTime = FVPFast(param, z, p, NumThreads);
+        if (FVPTime<0) {
             fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
             free(p); free(r); free(x); free(z);
             return -1;
         }
+        else {
+            ComptimeS += ((tv2.tv_sec-tv1.tv_sec) * (double)1E6 + (tv2.tv_usec-tv1.tv_usec)) / (double)1E6; 
+            ComptimeS += FVPTime;
+        }
         
         // Update x and r
         double pdotz = 0;
-        for (size_t i=0; i<NumParams; ++i) pdotz += p[i] * z[i];
+        gettimeofday(&tv1, NULL);
+        #pragma omp parallel for reduction (+:pdotz)
+        for (size_t i=0; i<NumParams; ++i) {
+            pdotz += p[i] * z[i];
+        }
         double v = rdotr / pdotz;
+        #pragma omp parallel for
         for (size_t i=0; i<NumParams; ++i) {
             x[i] += v * p[i];
             r[i] -= v * z[i];
@@ -1107,22 +1039,31 @@ int CG(TRPOparam param, double *Result, double *b, size_t MaxIter, double Residu
         
         // Update p
         double newrdotr = 0;
-        for (size_t i=0; i<NumParams; ++i) newrdotr += r[i] * r[i];
+        #pragma omp parallel for reduction (+:newrdotr)
+        for (size_t i=0; i<NumParams; ++i) {
+            newrdotr += r[i] * r[i];
+        }
         double mu = newrdotr / rdotr;
-        for (size_t i=0; i<NumParams; ++i) p[i] = r[i] + mu * p[i];
+        #pragma omp parallel for
+        for (size_t i=0; i<NumParams; ++i) {
+            p[i] = r[i] + mu * p[i];
+        }
         
         // Update rdotr
         rdotr = newrdotr;
+        
+        gettimeofday(&tv2, NULL);
+        ComptimeS += ((tv2.tv_sec-tv1.tv_sec) * (double)1E6 + (tv2.tv_usec-tv1.tv_usec)) / (double)1E6; 
     }
     
     // Clean Up
     free(p); free(r); free(x); free(z);
     
-    return 0;
+    return ComptimeS;
 }
 
 
-int FVP_FPGA (TRPOparam param, double *Result, double *Input)
+double FVP_FPGA (TRPOparam param, double *Result, double *Input)
 {
 
     //////////////////// Remarks ////////////////////
@@ -1526,349 +1467,11 @@ int FVP_FPGA (TRPOparam param, double *Result, double *Input)
     // Free Memories Allocated for DFE
     free(Observation); free(BiasStd); free(FVPResult);
 
-    return 0;
+    return runtimeS;
 }
 
 
-void SimpleTest() {
-
-    // Simple Data 2-2-2
-    char AcFunc [] = {'l', 's', 's'};
-    size_t LayerSize [] = {2, 2, 2};
-
-    TRPOparam Param;
-    Param.ModelFile  = "SimpleTestModel.txt";
-    Param.DataFile   = "SimpleTestData.txt";
-    Param.NumLayers  = 3;
-    Param.AcFunc     = AcFunc;
-    Param.LayerSize  = LayerSize;
-    Param.NumSamples = 1;
-    Param.CG_Damping = 0.1;
-
-    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
-    double * input   = (double *) calloc(NumParams, sizeof(double));
-    double * result  = (double *) calloc(NumParams, sizeof(double));
-
-    int FVPStatus = FVP(Param, result, input);
-    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
-    
-    free(input); free(result);
-
-}
-
-
-void PendulumTest()
-{
-	
-    // Simplified version of Pendulum-v0 with hidden_size set to 4
-    char AcFunc [] = {'l', 't', 'l'};
-    size_t LayerSize [] = {3, 4, 1};
-
-    char * ModelFileName = "PendulumTestModel.txt";
-    char * DataFileName  = "PendulumTestData.txt";
-    char * FVPFileName   = "PendulumTestFVP.txt";
-
-    TRPOparam Param;
-    Param.ModelFile  = ModelFileName;
-    Param.DataFile   = DataFileName;
-    Param.NumLayers  = 3;
-    Param.AcFunc     = AcFunc;
-    Param.LayerSize  = LayerSize;
-    Param.NumSamples = 200;
-    Param.CG_Damping = 0.1;
-
-    // Open Simulation Data File that contains test data
-    FILE *DataFilePointer = fopen(FVPFileName, "r");
-    if (DataFilePointer==NULL) {
-        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
-        return;
-    }
-
-    // Memory Allocation
-    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
-    double * input   = (double *) calloc(NumParams, sizeof(double));
-    double * result  = (double *) calloc(NumParams, sizeof(double));
-    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
-    
-    // Read Input and Expect
-    for (size_t i=0; i<NumParams; ++i) {
-         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
-    }
-    fclose(DataFilePointer);
-
-    int FVPStatus = FVPFast(Param, result, input);
-    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
-    
-    // Check Result
-    printf("\n--------------------------- Pendulum Test ---------------------------");
-    size_t pos = 0;
-    for (size_t i=0; i<Param.NumLayers-1; ++i) {
-        size_t curLayerDim = LayerSize[i];
-        size_t nextLayerDim = LayerSize[i+1];
-        printf("\n");
-        for (size_t j=0; j<curLayerDim;++j) {
-            for (size_t k=0; k<nextLayerDim; ++k) {
-                printf("FVP W[%zu][%zu][%zu] expected=%f, result=%f\n", i, j, k, expect[pos], result[pos]);
-                pos++;
-            }
-        }
-        for (size_t k=0; k<nextLayerDim; ++k) {
-            printf("FVP Bias[%zu][%zu] expected=%f, result=%f\n", i, k, expect[pos], result[pos]);
-            pos++;
-        }
-    }
-    for (size_t k=0; k<LayerSize[Param.NumLayers-1]; ++k) {
-        printf("\nFVP LogStd[%zu] expected=%f, result=%f\n", k, expect[pos], result[pos]);
-        pos++;
-    }
-    
-    double percentage_err = 0;
-    for (size_t i=0; i<NumParams; ++i) {
-        double cur_percentage_err = abs((result[i]-expect[i])/expect[i]);
-    	if (expect[i] != 0) percentage_err += cur_percentage_err;
-    }
-    percentage_err = percentage_err * 100.0 / (double)NumParams;
-    printf("\n[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
-    printf("---------------------------------------------------------------------\n\n");
-
-    // Clean Up    
-    free(input); free(result); free(expect);
-    
-    return;
-}
-
-void SwimmerTest()
-{
-	
-    // Swimmer-v1
-    char AcFunc [] = {'l', 't', 't', 'l'};
-    size_t LayerSize [] = {8, 64, 64, 2};
-
-    char * ModelFileName = "SwimmerTestModel.txt";
-    char * DataFileName  = "SwimmerTestData.txt";
-    char * FVPFileName   = "SwimmerTestFVP.txt";
-
-    TRPOparam Param;
-    Param.ModelFile  = ModelFileName;
-    Param.DataFile   = DataFileName;
-    Param.NumLayers  = 4;
-    Param.AcFunc     = AcFunc;
-    Param.LayerSize  = LayerSize;
-    Param.NumSamples = 26000;
-    Param.CG_Damping = 0.1;
-
-    // Open Simulation Data File that contains test data
-    FILE *DataFilePointer = fopen(FVPFileName, "r");
-    if (DataFilePointer==NULL) {
-        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
-        return;
-    }
-
-    // Memory Allocation
-    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
-    double * input   = (double *) calloc(NumParams, sizeof(double));
-    double * result  = (double *) calloc(NumParams, sizeof(double));
-    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
-    
-    // Read Input and Expect
-    for (size_t i=0; i<NumParams; ++i) {
-         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
-    }
-    fclose(DataFilePointer);
-
-    int FVPStatus = FVPFast(Param, result, input);
-    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
-    
-    // Check Result
-    double percentage_err = 0;
-    for (size_t i=0; i<NumParams; ++i) {        
-        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
-    	if (expect[i] != 0) percentage_err += cur_err;
-    	if (cur_err>0.1) printf("FVP[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
-    }
-    percentage_err = percentage_err / (double)NumParams;
-    printf("--------------------------- Swimmer Test ----------------------------\n");
-    printf("[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
-    printf("---------------------------------------------------------------------\n\n");
-
-    // Clean Up    
-    free(input); free(result); free(expect);
-    
-    return;
-}
-
-
-void SwimmerCGTest()
-{
-	
-    // Swimmer-v1
-    char AcFunc [] = {'l', 't', 't', 'l'};
-    size_t LayerSize [] = {8, 64, 64, 2};
-
-    char * ModelFileName = "SwimmerTestModel.txt";
-    char * DataFileName  = "SwimmerTestData.txt";
-    char * CGFileName    = "SwimmerTestCG.txt";
-
-    TRPOparam Param;
-    Param.ModelFile  = ModelFileName;
-    Param.DataFile   = DataFileName;
-    Param.NumLayers  = 4;
-    Param.AcFunc     = AcFunc;
-    Param.LayerSize  = LayerSize;
-    Param.NumSamples = 26000;
-    Param.CG_Damping = 0.1;
-
-    // Open Simulation Data File that contains test data
-    FILE *DataFilePointer = fopen(CGFileName, "r");
-    if (DataFilePointer==NULL) {
-        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", CGFileName);
-        return;
-    }
-
-    // Memory Allocation
-    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
-    double * input   = (double *) calloc(NumParams, sizeof(double));
-    double * result  = (double *) calloc(NumParams, sizeof(double));
-    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
-    
-    // Read Input and Expect
-    for (size_t i=0; i<NumParams; ++i) {
-         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
-    }
-    fclose(DataFilePointer);
-    
-    printf("-------------------------- Swimmer CG Test ---------------------------\n");
-    int CGStatus = CG(Param, result, input, 10, 1e-10);
-    if (CGStatus!=0) fprintf(stderr, "[ERROR] Conjugate Gradient Calculation Failed.\n");
-    
-    // Check Result
-    double percentage_err = 0;
-    for (size_t i=0; i<NumParams; ++i) {        
-        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
-    	if (expect[i] != 0) percentage_err += cur_err;
-    	if (cur_err>0.1) printf("CG[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
-    }
-    percentage_err = percentage_err / (double)NumParams;
-    printf("\n[INFO] Conjugate Gradient Average Percentage Error = %.4f%%\n", percentage_err);
-    printf("---------------------------------------------------------------------\n\n");
-
-    // Clean Up    
-    free(input); free(result); free(expect);
-    
-    return;
-}
-
-
-void Test_FVP_FPGA() {
-
-/*
-    // Swimmer-v1
-    char            AcFunc [] = {'l', 't', 't', 'l'};
-    size_t       LayerSize [] = {  8, 64, 64, 2};
-    size_t PaddedLayerSize [] = { 32, 64, 64, 8};
-    size_t       NumBlocks [] = {  4,  4,  4, 4};
-
-
-    char * ModelFileName = "SwimmerTestModel.txt";
-    char * DataFileName  = "SwimmerTestData.txt";
-    char * FVPFileName   = "SwimmerTestFVP.txt";
-*/
-/*
-    // Ant-v1
-    char            AcFunc [] = {'l', 't', 't', 'l'};
-    size_t       LayerSize [] = {111, 64, 32, 8};
-    size_t PaddedLayerSize [] = {128, 64, 64, 8};
-    size_t       NumBlocks [] = { 32,  4,  4, 4};
-
-    char * ModelFileName = "AntTestModel.txt";
-    char * DataFileName  = "AntTestData.txt";
-    char * FVPFileName   = "AntTestFVP.txt";
-*/
-
-    // Humanoid-v1
-    char            AcFunc [] = {'l', 't', 't', 'l'};
-    size_t       LayerSize [] = {376,128, 64,17};
-    size_t PaddedLayerSize [] = {384,128, 64,20};
-    size_t       NumBlocks [] = { 32,  4,  4, 4};
-
-    char * ModelFileName = "HumanoidTestModel.txt";
-    char * DataFileName  = "HumanoidTestData.txt";
-    char * FVPFileName   = "HumanoidTestFVP.txt";
-
-    TRPOparam Param;
-    Param.ModelFile         = ModelFileName;
-    Param.DataFile          = DataFileName;
-    Param.NumLayers         = 4;
-    Param.AcFunc            = AcFunc;
-    Param.LayerSize         = LayerSize;
-    Param.PaddedLayerSize   = PaddedLayerSize;
-    Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 16;
-    Param.CG_Damping        = 0.1;
-
-    // Open Simulation Data File that contains test data
-    FILE *DataFilePointer = fopen(FVPFileName, "r");
-    if (DataFilePointer==NULL) {
-        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
-        return;
-    }
-
-    // Memory Allocation
-    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
-    double *       input = (double *) calloc(NumParams, sizeof(double));
-    double *  CPU_output = (double *) calloc(NumParams, sizeof(double));
-    double * FPGA_output = (double *) calloc(NumParams, sizeof(double));
-    
-    // Read Input
-    for (size_t i=0; i<NumParams; ++i) {
-        double temp;
-        fscanf(DataFilePointer, "%lf %lf", &input[i], &temp);
-    }
-    fclose(DataFilePointer);
-
-    //////////////////// CPU ////////////////////
-
-    int FVPStatus = FVPFast(Param, CPU_output, input);
-    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
-
-    //////////////////// FPGA ////////////////////
-
-    FVP_FPGA(Param, FPGA_output, input);
-
-    //////////////////// Check Results ////////////////////
-  
-    // Check Result
-    double percentage_err = 0;
-    for (size_t i=0; i<NumParams; ++i) {        
-        double cur_err = abs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100;
-    	if (CPU_output[i] != 0) percentage_err += cur_err;
-    	if (cur_err>0.1) {
-    	    printf("FVP_FPGA[%zu]=%e, FVP_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
-    	}
-    }
-    
-    // Print Results
-    FILE *ResultFilePointer = fopen("result.txt", "w");
-    if(ResultFilePointer == NULL) fprintf(stderr, "[ERROR] Open Output File Failed.\n");
-    for (size_t i=0; i<NumParams; ++i) {
-        fprintf(ResultFilePointer, "CPU_output[%4zu] = % 014.12f, FPGA_output[%4zu] = % 014.12f\n", i, CPU_output[i], i, FPGA_output[i]);
-    }
-    fclose(ResultFilePointer);
-    
-    percentage_err = percentage_err / (double)NumParams;
-    printf("--------------------------- Test FVP FPGA ---------------------------\n");
-    printf("[INFO] Fisher Vector Product Average Percentage Error = %.12f%%\n", percentage_err);
-    printf("---------------------------------------------------------------------\n\n");
-
-
-    // Clean Up    
-    free(input); free(CPU_output); free(FPGA_output);
-    
-    return;
-
-}
-
-int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double ResidualTh, size_t NumThreads)
+double CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double ResidualTh, size_t NumThreads)
 {
 
     //////////////////// Conjugate Gradient ////////////////////
@@ -2096,10 +1699,7 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
 	fprintf(stderr, "[INFO] Initialising FPGA...\n");
 	max_file_t*  maxfile = TRPO_init();
 	max_engine_t* engine = max_load(maxfile, "*");
-
     fprintf(stderr, "[INFO] Loading Model and Simulation Data...\n");
-
-
 
     // Length of Observation Vector
     // Remarks: DRAM Write requires data bit-size to be a multiple of 384bytes
@@ -2487,14 +2087,353 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
     // Free Memories Allocated for CG
     free(p); free(r); free(x); free(z); free(DataP);
 
-    return 0;
+    return runtimeComp;
+}
+
+void SimpleTest() {
+
+    // Simple Data 2-2-2
+    char AcFunc [] = {'l', 's', 's'};
+    size_t LayerSize [] = {2, 2, 2};
+
+    TRPOparam Param;
+    Param.ModelFile  = "SimpleTestModel.txt";
+    Param.DataFile   = "SimpleTestData.txt";
+    Param.NumLayers  = 3;
+    Param.AcFunc     = AcFunc;
+    Param.LayerSize  = LayerSize;
+    Param.NumSamples = 1;
+    Param.CG_Damping = 0.1;
+
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double * input   = (double *) calloc(NumParams, sizeof(double));
+    double * result  = (double *) calloc(NumParams, sizeof(double));
+
+    double FVPStatus = FVP(Param, result, input);
+    if (FVPStatus<0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
+    
+    free(input); free(result);
+
 }
 
 
-void Test_CG_FPGA()
+void PendulumTest(size_t NumThreads)
+{
+	
+    // Simplified version of Pendulum-v0 with hidden_size set to 4
+    char AcFunc [] = {'l', 't', 'l'};
+    size_t LayerSize [] = {3, 4, 1};
+
+    char * ModelFileName = "PendulumTestModel.txt";
+    char * DataFileName  = "PendulumTestData.txt";
+    char * FVPFileName   = "PendulumTestFVP.txt";
+
+    TRPOparam Param;
+    Param.ModelFile  = ModelFileName;
+    Param.DataFile   = DataFileName;
+    Param.NumLayers  = 3;
+    Param.AcFunc     = AcFunc;
+    Param.LayerSize  = LayerSize;
+    Param.NumSamples = 200;
+    Param.CG_Damping = 0.1;
+
+    // Open Simulation Data File that contains test data
+    FILE *DataFilePointer = fopen(FVPFileName, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
+        return;
+    }
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double * input   = (double *) calloc(NumParams, sizeof(double));
+    double * result  = (double *) calloc(NumParams, sizeof(double));
+    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
+    
+    // Read Input and Expect
+    for (size_t i=0; i<NumParams; ++i) {
+         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
+    }
+    fclose(DataFilePointer);
+
+    double FVPStatus = FVPFast(Param, result, input, NumThreads);
+    if (FVPStatus<0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
+    
+    // Check Result
+    printf("\n------------------------ Pendulum Test (%zu Threads) ------------------------", NumThreads);
+    size_t pos = 0;
+    for (size_t i=0; i<Param.NumLayers-1; ++i) {
+        size_t curLayerDim = LayerSize[i];
+        size_t nextLayerDim = LayerSize[i+1];
+        printf("\n");
+        for (size_t j=0; j<curLayerDim;++j) {
+            for (size_t k=0; k<nextLayerDim; ++k) {
+                printf("FVP W[%zu][%zu][%zu] expected=%f, result=%f\n", i, j, k, expect[pos], result[pos]);
+                pos++;
+            }
+        }
+        for (size_t k=0; k<nextLayerDim; ++k) {
+            printf("FVP Bias[%zu][%zu] expected=%f, result=%f\n", i, k, expect[pos], result[pos]);
+            pos++;
+        }
+    }
+    for (size_t k=0; k<LayerSize[Param.NumLayers-1]; ++k) {
+        printf("\nFVP LogStd[%zu] expected=%f, result=%f\n", k, expect[pos], result[pos]);
+        pos++;
+    }
+    
+    double percentage_err = 0;
+    for (size_t i=0; i<NumParams; ++i) {
+        double cur_percentage_err = abs((result[i]-expect[i])/expect[i]);
+    	if (expect[i] != 0) percentage_err += cur_percentage_err;
+    }
+    percentage_err = percentage_err * 100.0 / (double)NumParams;
+    printf("\n[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("---------------------------------------------------------------------\n\n");
+
+    // Clean Up    
+    free(input); free(result); free(expect);
+    
+    return;
+}
+
+void SwimmerTest(size_t NumThreads)
+{
+	
+    // Swimmer-v1
+    char AcFunc [] = {'l', 't', 't', 'l'};
+    size_t LayerSize [] = {8, 64, 64, 2};
+
+    char * ModelFileName = "SwimmerTestModel.txt";
+    char * DataFileName  = "SwimmerTestData.txt";
+    char * FVPFileName   = "SwimmerTestFVP.txt";
+
+    TRPOparam Param;
+    Param.ModelFile  = ModelFileName;
+    Param.DataFile   = DataFileName;
+    Param.NumLayers  = 4;
+    Param.AcFunc     = AcFunc;
+    Param.LayerSize  = LayerSize;
+    Param.NumSamples = 26000;
+    Param.CG_Damping = 0.1;
+
+    // Open Simulation Data File that contains test data
+    FILE *DataFilePointer = fopen(FVPFileName, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
+        return;
+    }
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double * input   = (double *) calloc(NumParams, sizeof(double));
+    double * result  = (double *) calloc(NumParams, sizeof(double));
+    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
+    
+    // Read Input and Expect
+    for (size_t i=0; i<NumParams; ++i) {
+         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
+    }
+    fclose(DataFilePointer);
+
+    double FVPStatus = FVPFast(Param, result, input, NumThreads);
+    if (FVPStatus<0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
+    
+    // Check Result
+    double percentage_err = 0;
+    for (size_t i=0; i<NumParams; ++i) {        
+        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
+    	if (expect[i] != 0) percentage_err += cur_err;
+    	if (cur_err>0.1) printf("FVP[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
+    }
+    percentage_err = percentage_err / (double)NumParams;
+    printf("--------------------- Swimmer Test (%zu Threads) ----------------------\n", NumThreads);
+    printf("[INFO] Fisher Vector Product Average Percentage Error = %.12f%%\n", percentage_err);
+    printf("---------------------------------------------------------------------\n\n");
+
+    // Clean Up    
+    free(input); free(result); free(expect);
+    
+    return;
+}
+
+
+void SwimmerCGTest(size_t NumThreads)
+{
+	
+    // Swimmer-v1
+    char AcFunc [] = {'l', 't', 't', 'l'};
+    size_t LayerSize [] = {8, 64, 64, 2};
+
+    char * ModelFileName = "SwimmerTestModel.txt";
+    char * DataFileName  = "SwimmerTestData.txt";
+    char * CGFileName    = "SwimmerTestCG.txt";
+
+    TRPOparam Param;
+    Param.ModelFile  = ModelFileName;
+    Param.DataFile   = DataFileName;
+    Param.NumLayers  = 4;
+    Param.AcFunc     = AcFunc;
+    Param.LayerSize  = LayerSize;
+    Param.NumSamples = 26000;
+    Param.CG_Damping = 0.1;
+
+    // Open Simulation Data File that contains test data
+    FILE *DataFilePointer = fopen(CGFileName, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", CGFileName);
+        return;
+    }
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double * input   = (double *) calloc(NumParams, sizeof(double));
+    double * result  = (double *) calloc(NumParams, sizeof(double));
+    double * expect  = (double *) calloc(NumParams, sizeof(double)); 
+    
+    // Read Input and Expect
+    for (size_t i=0; i<NumParams; ++i) {
+         fscanf(DataFilePointer, "%lf %lf", &input[i], &expect[i]);
+    }
+    fclose(DataFilePointer);
+    
+    printf("----------------------- Swimmer CG Test (%zu Threads) ------------------------\n", NumThreads);
+    double compTime = CG(Param, result, input, 10, 1e-10, NumThreads);
+    if (compTime<0) fprintf(stderr, "[ERROR] Conjugate Gradient Calculation Failed.\n");
+    
+    // Check Result
+    double percentage_err = 0;
+    for (size_t i=0; i<NumParams; ++i) {        
+        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
+    	if (expect[i] != 0) percentage_err += cur_err;
+    	if (cur_err>0.1) printf("CG[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
+    }
+    percentage_err = percentage_err / (double)NumParams;
+    printf("\n[INFO] CPU Computing Time = %f seconds\n", compTime);
+    printf("[INFO] Conjugate Gradient Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("---------------------------------------------------------------------\n\n");
+
+    // Clean Up    
+    free(input); free(result); free(expect);
+    
+    return;
+}
+
+
+void Test_FVP_FPGA() {
+
+/*
+    // Swimmer-v1
+    char            AcFunc [] = {'l', 't', 't', 'l'};
+    size_t       LayerSize [] = {  8, 64, 64, 2};
+    size_t PaddedLayerSize [] = { 32, 64, 64, 8};
+    size_t       NumBlocks [] = {  4,  4,  4, 4};
+
+
+    char * ModelFileName = "SwimmerTestModel.txt";
+    char * DataFileName  = "SwimmerTestData.txt";
+    char * FVPFileName   = "SwimmerTestFVP.txt";
+*/
+/*
+    // Ant-v1
+    char            AcFunc [] = {'l', 't', 't', 'l'};
+    size_t       LayerSize [] = {111, 64, 32, 8};
+    size_t PaddedLayerSize [] = {128, 64, 64, 8};
+    size_t       NumBlocks [] = { 32,  4,  4, 4};
+
+    char * ModelFileName = "AntTestModel.txt";
+    char * DataFileName  = "AntTestData.txt";
+    char * FVPFileName   = "AntTestFVP.txt";
+*/
+
+    // Humanoid-v1
+    char            AcFunc [] = {'l', 't', 't', 'l'};
+    size_t       LayerSize [] = {376,128, 64,17};
+    size_t PaddedLayerSize [] = {384,128, 64,20};
+    size_t       NumBlocks [] = { 32,  4,  4, 4};
+
+    char * ModelFileName = "HumanoidTestModel.txt";
+    char * DataFileName  = "HumanoidTestData.txt";
+    char * FVPFileName   = "HumanoidTestFVP.txt";
+
+    TRPOparam Param;
+    Param.ModelFile         = ModelFileName;
+    Param.DataFile          = DataFileName;
+    Param.NumLayers         = 4;
+    Param.AcFunc            = AcFunc;
+    Param.LayerSize         = LayerSize;
+    Param.PaddedLayerSize   = PaddedLayerSize;
+    Param.NumBlocks         = NumBlocks;
+    Param.NumSamples        = 50000;
+    Param.CG_Damping        = 0.1;
+
+    // Open Simulation Data File that contains test data
+    FILE *DataFilePointer = fopen(FVPFileName, "r");
+    if (DataFilePointer==NULL) {
+        fprintf(stderr, "[ERROR] Cannot open Data File [%s]. \n", FVPFileName);
+        return;
+    }
+
+    // Memory Allocation
+    size_t NumParams = NumParamsCalc(Param.LayerSize, Param.NumLayers);
+    double *       input = (double *) calloc(NumParams, sizeof(double));
+    double *  CPU_output = (double *) calloc(NumParams, sizeof(double));
+    double * FPGA_output = (double *) calloc(NumParams, sizeof(double));
+    
+    // Read Input
+    for (size_t i=0; i<NumParams; ++i) {
+        double temp;
+        fscanf(DataFilePointer, "%lf %lf", &input[i], &temp);
+    }
+    fclose(DataFilePointer);
+
+    //////////////////// CPU ////////////////////
+
+    int FVPStatus = FVP(Param, CPU_output, input);
+    if (FVPStatus!=0) fprintf(stderr, "[ERROR] Fisher Vector Product Calculation Failed.\n");
+
+    //////////////////// FPGA ////////////////////
+
+    double runtimeFPGA = FVP_FPGA(Param, FPGA_output, input);
+
+    //////////////////// Check Results ////////////////////
+  
+    // Check Result
+    double percentage_err = 0;
+    for (size_t i=0; i<NumParams; ++i) {        
+        double cur_err = abs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100;
+    	if (CPU_output[i] != 0) percentage_err += cur_err;
+    	if (cur_err>0.1) {
+    	    printf("FVP_FPGA[%zu]=%e, FVP_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
+    	}
+    }
+    
+    // Print Results
+    FILE *ResultFilePointer = fopen("result.txt", "w");
+    if(ResultFilePointer == NULL) fprintf(stderr, "[ERROR] Open Output File Failed.\n");
+    for (size_t i=0; i<NumParams; ++i) {
+        fprintf(ResultFilePointer, "CPU_output[%4zu] = % 014.12f, FPGA_output[%4zu] = % 014.12f\n", i, CPU_output[i], i, FPGA_output[i]);
+    }
+    fclose(ResultFilePointer);
+    
+    percentage_err = percentage_err / (double)NumParams;
+    printf("--------------------------- Test FPGA ---------------------------\n");
+    printf("[INFO] FPGA Computing Time = %f seconds\n", runtimeFPGA);
+    printf("[INFO] Fisher Vector Product Average Percentage Error = %.12f%%\n", percentage_err);
+    printf("---------------------------------------------------------------------\n\n");
+
+
+    // Clean Up    
+    free(input); free(CPU_output); free(FPGA_output);
+    
+    return;
+
+}
+
+void Test_CG_FPGA(size_t NumThreads)
 {
 
-
+/*
     // Swimmer-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {  8, 64, 64, 2};
@@ -2505,7 +2444,7 @@ void Test_CG_FPGA()
     char * ModelFileName = "SwimmerTestModel.txt";
     char * DataFileName  = "SwimmerTestData.txt";
     char * CGFileName    = "SwimmerTestCG.txt";
-
+*/
 /*
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
@@ -2517,7 +2456,7 @@ void Test_CG_FPGA()
     char * DataFileName  = "AntTestData.txt";
     char * CGFileName    = "AntTestCG.txt";
 */
-/*
+
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
@@ -2527,7 +2466,7 @@ void Test_CG_FPGA()
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";
     char * CGFileName    = "HumanoidTestCG.txt";
-*/
+
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;
@@ -2536,7 +2475,7 @@ void Test_CG_FPGA()
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 16;
+    Param.NumSamples        = 10000;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
@@ -2560,24 +2499,26 @@ void Test_CG_FPGA()
     fclose(DataFilePointer);
 
     // FPGA-based CG Calculation    
-    printf("\n-------------------------- CG Test FPGA ---------------------------\n");
-    int CGStatus_FPGA = CG_FPGA(Param, FPGA_output, input, 10, 1e-10, 6);
-    if (CGStatus_FPGA!=0) fprintf(stderr, "[ERROR] FPGA-based Conjugate Gradient Calculation Failed.\n");
+    printf("\n---------------------- CG Test FPGA (%zu Threads) -----------------------\n", NumThreads);
+    double runtimeFPGA=0;
+//    double runtimeFPGA = CG_FPGA(Param, FPGA_output, input, 10, 1e-10, NumThreads);
+    if (runtimeFPGA<0) fprintf(stderr, "[ERROR] FPGA-based Conjugate Gradient Calculation Failed.\n");
 
     // CPU-based CG Calculation
-    printf("-------------------------- CG Test CPU ---------------------------\n");
-    int CGStatus_CPU = CG(Param, CPU_output, input, 10, 1e-10);
-    if (CGStatus_CPU!=0) fprintf(stderr, "[ERROR] CPU-based Conjugate Gradient Calculation Failed.\n");
+    printf("---------------------- CG Test CPU (%zu Threads) -----------------------\n", NumThreads);
+    double runtimeCPU = CG(Param, CPU_output, input, 10, 1e-10, NumThreads);
+    if (runtimeCPU<0) fprintf(stderr, "[ERROR] CPU-based Conjugate Gradient Calculation Failed.\n");
     
     // Check Result
     double percentage_err = 0;
     for (size_t i=0; i<NumParams; ++i) {        
         double cur_err = abs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100;
     	if (CPU_output[i] != 0) percentage_err += cur_err;
-    	if (cur_err>0.1) printf("CG_FPGA[%zu]=%e, CG_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
+//    	if (cur_err>0.1) printf("CG_FPGA[%zu]=%e, CG_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
     }
     percentage_err = percentage_err / (double)NumParams;
     printf("\n-------------------------- CG Result Check --------------------------\n");
+    printf("[INFO] FPGA Time = %f seconds, CPU Time = %f seconds\n", runtimeFPGA, runtimeCPU);
     printf("[INFO] Conjugate Gradient Average Percentage Error = %.12f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
@@ -2594,15 +2535,15 @@ int main()
     //////////////////// Fisher Vector Product Computation ////////////////////
     
 //    SimpleTest();
-//    PendulumTest();
-//    SwimmerTest();
-//    SwimmerCGTest();
+//    PendulumTest(6);
+//    SwimmerTest(6);
+//    SwimmerCGTest(6);
 
 
     //////////////////// FPGA ////////////////////
 
 //    Test_FVP_FPGA();
-    Test_CG_FPGA();
+    Test_CG_FPGA(6);
 
     return 0;
 }
