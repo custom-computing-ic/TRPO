@@ -18,13 +18,13 @@ class Def {
     public static final int BufferDepth   = 2;
     public static final char [] AcFunc    = {'l', 't', 't', 'l'};
 
-//    public static final int  [] LayerSize = { 32, 64, 64, 8};
-//    public static final int  [] NumBlocks = {  4,  4,  4, 4};
+    public static final int  [] LayerSize = { 32, 64, 64, 8};
+    public static final int  [] NumBlocks = {  4,  4,  4, 4};
 //    public static final int  [] LayerSize = {128, 64, 64, 8};
 //    public static final int  [] NumBlocks = { 32,  4,  4, 4};
     
-    public static final int  [] LayerSize = {384,128, 64, 20};
-    public static final int  [] NumBlocks = { 32,  4,  4,  4};
+//    public static final int  [] LayerSize = {384,128, 64, 20};
+//    public static final int  [] NumBlocks = { 32,  4,  4,  4};
 
 
 

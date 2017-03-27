@@ -2119,6 +2119,9 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
     fprintf(stderr, "[INFO] Vector P (%zu bytes) padded to %zu bytes\n", ActualDataPVecItems*8, PaddedDataPVecItems*8);
     double * DataP = (double *) calloc(PaddedDataPVecItems, sizeof(double));
     
+    // Number of Ticks for each CG iteration
+    fprintf(stderr, "[INFO] In each iteration FPGA will run for %zu cycles.\n", NumTicks);
+    
     // Feed Weight and VWeight into Observation
     size_t RowNum = 0;
     for (size_t ID=0; ID<NumLayers-1; ++ID) {
@@ -2214,25 +2217,35 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
     }
 
     // Init FPGA
+    fprintf(stderr, "[INFO] Loading Model and Simulation Data...\n");
     TRPO_WriteDRAM_actions_t init_action;
     init_action.param_start_bytes = 0;
     init_action.param_size_bytes = PaddedObservVecItems * sizeof(double);
     init_action.instream_fromCPU = Observation;
     TRPO_WriteDRAM_run(engine, &init_action);
-    fprintf(stderr, "[INFO] Loading Model and Simulation Data...Done\n");
-
+    
 
     //////////////////// CG - Main Loop ////////////////////
-
+    
+    // Measuring Total Time and Total Computing Time
+    double runtimeComp = 0;
+    struct timeval tv1, tv2;
+    struct timeval tv3, tv4;
+        
     // Iterative Solver
+    gettimeofday(&tv3, NULL);
     for (size_t iter=0; iter<=MaxIter; ++iter) {
 
         // Calculate Frobenius Norm of x
         double FrobNorm = 0;
+        gettimeofday(&tv1, NULL);
+        #pragma omp parallel for reduction (+:FrobNorm)
         for (size_t i=0; i<NumParams; ++i) {
             FrobNorm += x[i] * x[i];
         }
         FrobNorm = sqrt(FrobNorm);
+        gettimeofday(&tv2, NULL);
+        runtimeComp += ((tv2.tv_sec-tv1.tv_sec) * (double)1E6 + (tv2.tv_usec-tv1.tv_usec)) / (double)1E6;
         printf("CG Iter[%zu] Residual Norm=%e, Soln Norm=%e\n", iter, rdotr, FrobNorm);
         
         // Check Termination Condition
@@ -2358,8 +2371,7 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
         write_action.param_size_bytes = PaddedDataPVecItems * sizeof(double);
         write_action.instream_fromCPU = DataP;
         TRPO_WriteDRAM_run(engine, &write_action);
-        fprintf(stderr, "[INFO] Loading Vector P...Done\n");
-    
+
 
         //////////////////// FPGA - Calc z = FIM*p ////////////////////
 
@@ -2371,14 +2383,10 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
         run_action.outstream_FVP              = FVPResult;
 
         // Run DFE and Measure Elapsed Time
-        fprintf(stderr, "[INFO] Running on FPGA for %zu cycles...\n", NumTicks);
-        struct timeval tv1, tv2;
         gettimeofday(&tv1, NULL);
         TRPO_Run_run(engine, &run_action);
         gettimeofday(&tv2, NULL);
-        double runtimeS = ((tv2.tv_sec-tv1.tv_sec) * (double)1E6 + (tv2.tv_usec-tv1.tv_usec)) / (double)1E6;
-        fprintf(stderr, "[INFO] Running on FPGA...Done\n");
-        fprintf(stderr, "[INFO] Elasped Time (FPGA) is %f seconds.\n", runtimeS);
+        runtimeComp += ((tv2.tv_sec-tv1.tv_sec) * (double)1E6 + (tv2.tv_usec-tv1.tv_usec)) / (double)1E6;
 
         // Read FVP into z
         pos = 0;
@@ -2410,7 +2418,9 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
             pos++;
         }    
 
+        gettimeofday(&tv1, NULL);
         // Averaging Fisher Vector Product over the samples and apply CG Damping
+        #pragma omp parallel for
         for (size_t i=0; i<pos; ++i) {
             z[i] = z[i] / (double)NumSamples;
             z[i] += CG_Damping * p[i];
@@ -2420,8 +2430,12 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
     
         // Update x and r
         double pdotz = 0;
-        for (size_t i=0; i<NumParams; ++i) pdotz += p[i] * z[i];
+        #pragma omp parallel for reduction (+:pdotz)
+        for (size_t i=0; i<NumParams; ++i) {
+            pdotz += p[i] * z[i];
+        }
         double v = rdotr / pdotz;
+        #pragma omp parallel for
         for (size_t i=0; i<NumParams; ++i) {
             x[i] += v * p[i];
             r[i] -= v * z[i];
@@ -2429,13 +2443,28 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
         
         // Update p
         double newrdotr = 0;
-        for (size_t i=0; i<NumParams; ++i) newrdotr += r[i] * r[i];
+        #pragma omp parallel for reduction (+:newrdotr)
+        for (size_t i=0; i<NumParams; ++i) {
+            newrdotr += r[i] * r[i];
+        }
         double mu = newrdotr / rdotr;
-        for (size_t i=0; i<NumParams; ++i) p[i] = r[i] + mu * p[i];
+        #pragma omp parallel for
+        for (size_t i=0; i<NumParams; ++i) {
+            p[i] = r[i] + mu * p[i];
+        }
         
         // Update rdotr
         rdotr = newrdotr;
+        
+        gettimeofday(&tv2, NULL);
+        runtimeComp += ((tv2.tv_sec-tv1.tv_sec) * (double)1E6 + (tv2.tv_usec-tv1.tv_usec)) / (double)1E6;        
+        
     }
+    gettimeofday(&tv4, NULL);
+    double runtimeTotal = ((tv4.tv_sec-tv3.tv_sec) * (double)1E6 + (tv4.tv_usec-tv3.tv_usec)) / (double)1E6;    
+
+
+    fprintf(stderr, "[INFO] Total Time for FPGA is %f seconds. Pure Computing Time is %f seconds.\n", runtimeTotal, runtimeComp);
 
     //////////////////// Clean Up ////////////////////
 
@@ -2465,7 +2494,7 @@ int CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, double 
 void Test_CG_FPGA()
 {
 
-/*
+
     // Swimmer-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {  8, 64, 64, 2};
@@ -2476,7 +2505,7 @@ void Test_CG_FPGA()
     char * ModelFileName = "SwimmerTestModel.txt";
     char * DataFileName  = "SwimmerTestData.txt";
     char * CGFileName    = "SwimmerTestCG.txt";
-*/
+
 /*
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
@@ -2488,7 +2517,7 @@ void Test_CG_FPGA()
     char * DataFileName  = "AntTestData.txt";
     char * CGFileName    = "AntTestCG.txt";
 */
-
+/*
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
@@ -2498,7 +2527,7 @@ void Test_CG_FPGA()
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";
     char * CGFileName    = "HumanoidTestCG.txt";
-
+*/
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;
@@ -2531,7 +2560,7 @@ void Test_CG_FPGA()
     fclose(DataFilePointer);
 
     // FPGA-based CG Calculation    
-    printf("-------------------------- CG Test FPGA ---------------------------\n");
+    printf("\n-------------------------- CG Test FPGA ---------------------------\n");
     int CGStatus_FPGA = CG_FPGA(Param, FPGA_output, input, 10, 1e-10, 6);
     if (CGStatus_FPGA!=0) fprintf(stderr, "[ERROR] FPGA-based Conjugate Gradient Calculation Failed.\n");
 
@@ -2548,8 +2577,8 @@ void Test_CG_FPGA()
     	if (cur_err>0.1) printf("CG_FPGA[%zu]=%e, CG_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
     }
     percentage_err = percentage_err / (double)NumParams;
-    printf("-------------------------- CG Result Check --------------------------\n");
-    printf("\n[INFO] Conjugate Gradient Average Percentage Error = %.12f%%\n", percentage_err);
+    printf("\n-------------------------- CG Result Check --------------------------\n");
+    printf("[INFO] Conjugate Gradient Average Percentage Error = %.12f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
     // Clean Up    
