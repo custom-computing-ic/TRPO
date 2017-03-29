@@ -113,7 +113,7 @@ class MidLayer extends KernelLib{
     /////////////////////// Parameters ///////////////////////
     
     // Argument Check - Check if OutBlockDimCycleTime is too small  
-    if (OutBlockDimCycleTime<5) {
+    if (OutBlockDimCycleTime<4) {
         System.out.println("[Warning] Layer["+ID+"] OutBlockDimCycleTime = "+OutBlockDimCycleTime+", which is really small.");
         System.out.println("[Warning] Layer["+ID+"] Must make sure OutBlockDimCycleTime > MidLayer"+ID+"Offset_y");
         System.out.println("[Warning] Layer["+ID+"] Must make sure OutBlockDimCycleTime > MidLayer"+ID+"Offset_Ry");

@@ -23,8 +23,8 @@ class Def {
 //    public static final int  [] LayerSize = {128, 64, 64, 8};
 //    public static final int  [] NumBlocks = { 32,  4,  4, 4};
     
-    public static final int  [] LayerSize = {384,128, 64, 20};
-    public static final int  [] NumBlocks = { 32,  4,  4,  4};
+    public static final int  [] LayerSize = {384,128, 66, 18};
+    public static final int  [] NumBlocks = { 32,  8,  6,  6};
 
 
 

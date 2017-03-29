@@ -33,8 +33,8 @@ public class TRPOManager extends CustomManager{
             BuildConfig BuildCfg = new BuildConfig(BuildConfig.Level.FULL_BUILD);
             BuildCfg.setBuildEffort(BuildConfig.Effort.VERY_HIGH);
             BuildCfg.setOptimizationGoal(BuildConfig.OptimizationTechnique.AREA);
-            BuildCfg.setMPPRCostTableSearchRange(1, 10);
-            BuildCfg.setMPPRParallelism(6);
+            BuildCfg.setMPPRCostTableSearchRange(1, 16);
+            BuildCfg.setMPPRParallelism(8);
             BuildCfg.setEnableTimingAnalysis(true);
             setBuildConfig(BuildCfg);
             
