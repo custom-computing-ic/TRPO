@@ -2474,7 +2474,7 @@ void Test_CG_FPGA(size_t NumThreads)
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 16;
+    Param.NumSamples        = 50000;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
@@ -2516,7 +2516,7 @@ void Test_CG_FPGA(size_t NumThreads)
     	    percentage_err += cur_err;
     	    max_percentage_err = (max_percentage_err > cur_err) ? max_percentage_err : cur_err;
     	}
-    	if (cur_err>1) printf("CG_FPGA[%zu]=%e, CG_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
+//    	if (cur_err>1) printf("CG_FPGA[%zu]=%e, CG_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
     }
     
     // Print Results
@@ -2554,7 +2554,7 @@ int main()
     //////////////////// FPGA ////////////////////
 
 //    Test_FVP_FPGA();
-    Test_CG_FPGA(1);
+    Test_CG_FPGA(6);
 
     return 0;
 }

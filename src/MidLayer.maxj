@@ -506,8 +506,8 @@ class MidLayer extends KernelLib{
         DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(),  mult_y_Acc.getElementsAsList());
         DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry_Acc.getElementsAsList());
         // Cast Bias and VBias into AccType to derive pre-activated value
-        NewPreAc_y[Y]  <== MultAdd_y  + (isFirstRow ?  Bias[Y].cast(Def.AccType) : Temp_y[Y]);
-        NewPreAc_Ry[Y] <== MultAdd_Ry + (isFirstRow ? VBias[Y].cast(Def.AccType) : Temp_Ry[Y]);
+        NewPreAc_y[Y]  <== isFirstRow ? MultAdd_y  +  Bias[Y].cast(Def.AccType) : MultAdd_y  + Temp_y[Y];
+        NewPreAc_Ry[Y] <== isFirstRow ? MultAdd_Ry + VBias[Y].cast(Def.AccType) : MultAdd_Ry + Temp_Ry[Y];
     }
 
     // Prepare Write Back Data
