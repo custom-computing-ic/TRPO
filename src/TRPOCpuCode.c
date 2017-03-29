@@ -327,8 +327,8 @@ double FVP (TRPOparam param, double *Result, double *Input)
         for (size_t i=0; i<ActionSpaceDim; ++i) {
             double output   = Layer[NumLayers-1][i];
             double expected = Mean[iter*ActionSpaceDim+i];
-            double err      = abs( (output - expected) / expected ) * 100;
-            if (err>0.1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
+            double err      = fabs( (output - expected) / expected ) * 100;
+            if (err>1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
         }
 
         
@@ -846,8 +846,8 @@ double FVPFast (TRPOparam param, double *Result, double *Input, size_t NumThread
         for (size_t i=0; i<ActionSpaceDim; ++i) {
             double output   = Layer[NumLayers-1][i];
             double expected = Mean[iter*ActionSpaceDim+i];
-            double err      = abs( (output - expected) / expected ) * 100;
-            if (err>0.1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
+            double err      = fabs( (output - expected) / expected ) * 100;
+            if (err>1) printf("out[%zu] = %e, mean = %e => %.4f%% Difference\n", i, output, expected, err);
         }
 
 
@@ -2183,11 +2183,11 @@ void PendulumTest(size_t NumThreads)
     
     double percentage_err = 0;
     for (size_t i=0; i<NumParams; ++i) {
-        double cur_percentage_err = abs((result[i]-expect[i])/expect[i]);
+        double cur_percentage_err = fabs((result[i]-expect[i])/expect[i]);
     	if (expect[i] != 0) percentage_err += cur_percentage_err;
     }
     percentage_err = percentage_err * 100.0 / (double)NumParams;
-    printf("\n[INFO] Fisher Vector Product Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("\n[INFO] Fisher Vector Product Mean Absolute Percentage Error = %.4f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
     // Clean Up    
@@ -2241,13 +2241,13 @@ void SwimmerTest(size_t NumThreads)
     // Check Result
     double percentage_err = 0;
     for (size_t i=0; i<NumParams; ++i) {        
-        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
+        double cur_err = fabs( (result[i]-expect[i])/expect[i] ) * 100;
     	if (expect[i] != 0) percentage_err += cur_err;
-    	if (cur_err>0.1) printf("FVP[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
+    	if (cur_err>1) printf("FVP[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
     }
     percentage_err = percentage_err / (double)NumParams;
     printf("--------------------- Swimmer Test (%zu Threads) ----------------------\n", NumThreads);
-    printf("[INFO] Fisher Vector Product Average Percentage Error = %.12f%%\n", percentage_err);
+    printf("[INFO] Fisher Vector Product Mean Absolute Percentage Error = %.12f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
     // Clean Up    
@@ -2303,13 +2303,13 @@ void SwimmerCGTest(size_t NumThreads)
     // Check Result
     double percentage_err = 0;
     for (size_t i=0; i<NumParams; ++i) {        
-        double cur_err = abs( (result[i]-expect[i])/expect[i] ) * 100;
+        double cur_err = fabs( (result[i]-expect[i])/expect[i] ) * 100;
     	if (expect[i] != 0) percentage_err += cur_err;
-    	if (cur_err>0.1) printf("CG[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
+    	if (cur_err>1) printf("CG[%zu]=%e, Expect=%e. %.4f%% Difference\n", i, result[i], expect[i], cur_err);
     }
     percentage_err = percentage_err / (double)NumParams;
     printf("\n[INFO] CPU Computing Time = %f seconds\n", compTime);
-    printf("[INFO] Conjugate Gradient Average Percentage Error = %.4f%%\n", percentage_err);
+    printf("[INFO] Conjugate Gradient Mean Absolute Percentage Error = %.4f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
     // Clean Up    
@@ -2321,7 +2321,7 @@ void SwimmerCGTest(size_t NumThreads)
 
 void Test_FVP_FPGA() {
 
-
+/*
     // Swimmer-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {  8, 64, 64, 2};
@@ -2332,7 +2332,7 @@ void Test_FVP_FPGA() {
     char * ModelFileName = "SwimmerTestModel.txt";
     char * DataFileName  = "SwimmerTestData.txt";
     char * FVPFileName   = "SwimmerTestFVP.txt";
-
+*/
 /*
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
@@ -2344,7 +2344,7 @@ void Test_FVP_FPGA() {
     char * DataFileName  = "AntTestData.txt";
     char * FVPFileName   = "AntTestFVP.txt";
 */
-/*
+
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
@@ -2354,7 +2354,7 @@ void Test_FVP_FPGA() {
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";
     char * FVPFileName   = "HumanoidTestFVP.txt";
-*/
+
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;
@@ -2400,10 +2400,10 @@ void Test_FVP_FPGA() {
     // Check Result
     double percentage_err = 0;
     for (size_t i=0; i<NumParams; ++i) {        
-        double cur_err = abs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100;
+        double cur_err = fabs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100;
     	if (CPU_output[i] != 0) percentage_err += cur_err;
-    	if (cur_err>0.1) {
-    	    printf("FVP_FPGA[%zu]=%e, FVP_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
+    	if (cur_err>1) {
+    	    printf("FVP_FPGA[%zu]=%e, FVP_CPU[%zu]=%e. %.12f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
     	}
     }
     
@@ -2418,7 +2418,7 @@ void Test_FVP_FPGA() {
     percentage_err = percentage_err / (double)NumParams;
     printf("--------------------------- Test FPGA ---------------------------\n");
     printf("[INFO] FPGA Computing Time = %f seconds\n", runtimeFPGA);
-    printf("[INFO] Average Percentage Error = %.12f%%\n", percentage_err);
+    printf("[INFO] Mean Absolute Percentage Error = %.12f%%\n", percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
 
@@ -2474,7 +2474,7 @@ void Test_CG_FPGA(size_t NumThreads)
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 16000;
+    Param.NumSamples        = 16;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
@@ -2511,19 +2511,18 @@ void Test_CG_FPGA(size_t NumThreads)
     double percentage_err = 0;
     double max_percentage_err = 0;
     for (size_t i=0; i<NumParams; ++i) {        
-        double cur_err = abs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100.0;
+        double cur_err = fabs( (FPGA_output[i]-CPU_output[i])/CPU_output[i] ) * 100.0;
     	if (CPU_output[i] != 0) {
     	    percentage_err += cur_err;
     	    max_percentage_err = (max_percentage_err > cur_err) ? max_percentage_err : cur_err;
     	}
-//    	if (cur_err>0.1) printf("CG_FPGA[%zu]=%e, CG_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
+    	if (cur_err>1) printf("CG_FPGA[%zu]=%e, CG_CPU[%zu]=%e. %.4f%% Difference\n", i, FPGA_output[i], i, CPU_output[i], cur_err);
     }
     
     // Print Results
     FILE *ResultFilePointer = fopen("result.txt", "w");
     if(ResultFilePointer == NULL) fprintf(stderr, "[ERROR] Open Output File Failed.\n");
     for (size_t i=0; i<NumParams; ++i) {
-//        fprintf(ResultFilePointer, "CPU_output[%4zu] = % 014.12f, FPGA_output[%4zu] = % 014.12f\n", i, CPU_output[i], i, FPGA_output[i]);
         fprintf(ResultFilePointer, "%.12f %.12f\n", CPU_output[i], FPGA_output[i]);
     }
     fclose(ResultFilePointer);    
@@ -2531,7 +2530,7 @@ void Test_CG_FPGA(size_t NumThreads)
     percentage_err = percentage_err / (double)NumParams;
     printf("\n-------------------------- CG Result Check --------------------------\n");
     printf("[INFO] FPGA Time = %f seconds, CPU Time = %f seconds\n", runtimeFPGA, runtimeCPU);
-    printf("[INFO] Average Percentage Error = %.12f%%, Max Percentage Error = %.12f%%\n", percentage_err, max_percentage_err);
+    printf("[INFO] Mean Absolute Percentage Error = %.12f%%, Max Percentage Error = %.12f%%\n", percentage_err, max_percentage_err);
     printf("---------------------------------------------------------------------\n\n");
 
     // Clean Up    
