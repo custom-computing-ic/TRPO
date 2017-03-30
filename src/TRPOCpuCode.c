@@ -2335,7 +2335,7 @@ void Test_FVP_FPGA() {
     char * DataFileName  = "SwimmerTestData.txt";
     char * FVPFileName   = "SwimmerTestFVP.txt";
 */
-
+/*
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {111, 64, 32, 8};
@@ -2345,8 +2345,8 @@ void Test_FVP_FPGA() {
     char * ModelFileName = "AntTestModel.txt";
     char * DataFileName  = "AntTestData.txt";
     char * FVPFileName    = "AntTestFVP.txt";
+*/
 
-/*
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
@@ -2356,7 +2356,7 @@ void Test_FVP_FPGA() {
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";
     char * FVPFileName   = "HumanoidTestFVP.txt";
-*/
+
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;
@@ -2365,7 +2365,7 @@ void Test_FVP_FPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 256;
+    Param.NumSamples        = 100;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
@@ -2446,7 +2446,7 @@ void Test_CG_FPGA(size_t NumThreads)
     char * DataFileName  = "SwimmerTestData.txt";
     char * CGFileName    = "SwimmerTestCG.txt";
 */
-
+/*
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {111, 64, 32, 8};
@@ -2456,8 +2456,8 @@ void Test_CG_FPGA(size_t NumThreads)
     char * ModelFileName = "AntTestModel.txt";
     char * DataFileName  = "AntTestData.txt";
     char * CGFileName    = "AntTestCG.txt";
+*/
 
-/*
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
@@ -2467,7 +2467,7 @@ void Test_CG_FPGA(size_t NumThreads)
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";
     char * CGFileName    = "HumanoidTestCG.txt";
-*/
+
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;
@@ -2476,7 +2476,7 @@ void Test_CG_FPGA(size_t NumThreads)
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 500;
+    Param.NumSamples        = 50000;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data

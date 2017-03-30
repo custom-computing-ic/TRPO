@@ -524,9 +524,17 @@ class Layer extends KernelLib{
     RyVec = (new DFEVectorType<DFEVar>(Def.RyType, NumOutBlocks)).newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // Calculate Multiplication using the type that has larger range
-        DFEVector<DFEVar> mult_y = FwdPrevLayer * FwdWGridVec[Y].cast(FwdPrevLayer.getType());
+        DFEVector<DFEVar> WGridY = FwdWGridVec[Y].cast(FwdPrevLayer.getType());
+        optimization.pushPipeliningFactor(Def.PipelineFactorMult);
+        DFEVector<DFEVar> mult_y = FwdPrevLayer * WGridY;
+        optimization.popPipeliningFactor();
         DFEVector<DFEVar> mult_Ry;
-        if (ID==0) mult_Ry = FwdPrevLayer * FwdVWGridVec[Y].cast(FwdPrevLayer.getType());
+        if (ID==0) {
+            DFEVector<DFEVar> FwdVWY = FwdVWGridVec[Y].cast(FwdPrevLayer.getType());
+            optimization.pushPipeliningFactor(Def.PipelineFactorMult);
+            mult_Ry = FwdPrevLayer * FwdVWY;
+            optimization.popPipeliningFactor();
+        }
         else {
             DFEVector<DFEVar> mult_Ry_part1 = FwdPrevRyLayer * FwdWGridVec[Y].cast(FwdPrevRyLayer.getType());
             DFEVector<DFEVar> mult_Ry_part2 = FwdPrevLayer * FwdVWGridVec[Y].cast(FwdPrevLayer.getType());
@@ -548,7 +556,9 @@ class Layer extends KernelLib{
         // Cast Activated Result Back into yType and RyType for next layer
         switch (AcFunc) {
             case 't': {
+                optimization.pushPipeliningFactor(Def.PipelineFactorTanH);
                 DFEVar Activated_y = Def.tanh(prevActivated_y).cast(Def.RyType);
+                optimization.popPipeliningFactor();
                  YVec[Y] <== Activated_y.cast(Def.yType);
                 RyVec[Y] <== prevActivated_Ry.cast(Def.RyType) * (1-Activated_y) * (1+Activated_y);
                 break;
@@ -688,11 +698,14 @@ class Layer extends KernelLib{
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // Calculate Multiplication in RGType
-            DFEVar thisRGW = (BwdPrevLayer[X].cast(Def.RGType) * RGLayerIndividual[Y].get()).cast(Def.RGWType);
+            DFEVar PrevX = BwdPrevLayer[X].cast(Def.RGType);
+            DFEVar RGLayerY = RGLayerIndividual[Y].get();
+            optimization.pushPipeliningFactor(Def.PipelineFactorMult);
+            DFEVar thisRGW = PrevX * RGLayerY;
+            optimization.popPipeliningFactor();
             // Do Accumulation in RGW Type
-            DFEVar NewRGW    = optimization.pipeline(BwdRGWRdGridVec[X][Y]) + optimization.pipeline(thisRGW);
-            DFEVar RGWWrData = isInitW.get() ? constant.var(Def.RGWType, 0) : stream.offset(NewRGW, -Offset_RGW);
-            BwdRGWWrGridVec[X][Y] <== optimization.pipeline(RGWWrData);
+            DFEVar NewRGW  = BwdRGWRdGridVec[X][Y] + thisRGW.cast(Def.RGWType);
+            BwdRGWWrGridVec[X][Y] <== isInitW.get() ? constant.var(Def.RGWType, 0) : stream.offset(NewRGW, -Offset_RGW);
         }
     }
 
