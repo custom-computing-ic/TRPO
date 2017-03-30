@@ -122,13 +122,14 @@ public class TRPOManager extends CustomManager{
 
         ///////////////////////// Output /////////////////////////
         
-        // Length of FVP Result
+        // Length of FVP Result, padded to a multiple of 2
         int FVPLength = 0;
         for (int i=0; i<NumLayers-1; ++i) {
             FVPLength += LayerSize[i] * LayerSize[i+1];
             FVPLength += LayerSize[i+1];
         }
-        ei.setStream("FVP", CPUTypes.DOUBLE, CPUTypes.DOUBLE.sizeInBytes()*FVPLength);
+        int PaddedFVPLength = ((int)Math.ceil((double)FVPLength/2))*2;
+        ei.setStream("FVP", CPUTypes.DOUBLE, CPUTypes.DOUBLE.sizeInBytes()*PaddedFVPLength);
 
 
         ///////////////////////// Ticks /////////////////////////
@@ -138,7 +139,7 @@ public class TRPOManager extends CustomManager{
         int FwdPropCyclesPerSample = BlockDim[0] + (BlockDim[1]-1)*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
         int BwdPropCyclesPerSample = BlockDim[1]*MaxBlkDim0Dim2 + BlockDim[2]*BlockDim[3];
         int PropCyclesPerSample    = Math.max(FwdPropCyclesPerSample, BwdPropCyclesPerSample);
-        InterfaceParam NumTicks = WeightInitVecLength + PropCyclesPerSample*(NumSamples+1) + FVPLength + 20;
+        InterfaceParam NumTicks = WeightInitVecLength + PropCyclesPerSample*(NumSamples+1) + PaddedFVPLength + 20;
         ei.setTicks(Name, NumTicks);
 
         ei.ignoreAll(Direction.IN_OUT);

@@ -225,10 +225,11 @@ class FVP extends KernelLib{
     int FstLayerReadBackCycles = LayerSize[0] * LayerSize[1] + LayerSize[1];
     int SndLayerReadBackCycles = LayerSize[1] * LayerSize[2] + LayerSize[2];
     int TrdLayerReadBackCycles = LayerSize[2] * LayerSize[3] + LayerSize[3];
-    int    TotalReadBackCycles = FstLayerReadBackCycles + SndLayerReadBackCycles + TrdLayerReadBackCycles;
+    int   ActualReadBackCycles = FstLayerReadBackCycles + SndLayerReadBackCycles + TrdLayerReadBackCycles;
+    int   PaddedReadBackCycles = ((int)Math.ceil((double)ActualReadBackCycles/2))*2;
     
     // Read Back Counter
-    AddrGenerator ReadBackCounter = new AddrGenerator(this, 1, TotalReadBackCycles, beginReadBack);
+    AddrGenerator ReadBackCounter = new AddrGenerator(this, 1, PaddedReadBackCycles, beginReadBack);
     DFEVar ReadBackCount = ReadBackCounter.getAddr();
     DFEVar isReadingBack = ReadBackCounter.isValid();
     

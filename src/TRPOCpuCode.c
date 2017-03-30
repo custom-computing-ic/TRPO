@@ -1387,12 +1387,13 @@ double FVP_FPGA (TRPOparam param, double *Result, double *Input)
         FVPLength += PaddedLayerSize[i] * PaddedLayerSize[i+1];
         FVPLength += PaddedLayerSize[i+1];
     }
+    int PaddedFVPLength = ((int)ceil((double)FVPLength/2))*2;
     
     // Number of Cycles to Run - Total
-    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + FVPLength + 20;
+    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + PaddedFVPLength + 20;
 
     // Allocation Memory Space for FVP Result
-    double * FVPResult = (double *) calloc(FVPLength, sizeof(double));
+    double * FVPResult = (double *) calloc(PaddedFVPLength, sizeof(double));
 
     // Init Advanced Static Interface
     TRPO_Run_actions_t run_action;
@@ -1529,12 +1530,13 @@ double CG_FPGA (TRPOparam param, double *Result, double *b, size_t MaxIter, doub
         FVPLength += PaddedLayerSize[i] * PaddedLayerSize[i+1];
         FVPLength += PaddedLayerSize[i+1];
     }
+    int PaddedFVPLength = ((int)ceil((double)FVPLength/2))*2;
     
     // Number of Cycles to Run on FPGA for Each FVP Computation - Total
-    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + FVPLength + 20;
+    size_t NumTicks = WeightInitVecLength + PropCyclesTotal + PaddedFVPLength + 20;
 
     // Allocation Memory Space for FVP Result
-    double * FVPResult = (double *) calloc(FVPLength, sizeof(double));
+    double * FVPResult = (double *) calloc(PaddedFVPLength, sizeof(double));
 
     // iterator when traversing through input vector and result vector
     size_t pos;
@@ -2333,18 +2335,18 @@ void Test_FVP_FPGA() {
     char * DataFileName  = "SwimmerTestData.txt";
     char * FVPFileName   = "SwimmerTestFVP.txt";
 */
-/*
+
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {111, 64, 32, 8};
-    size_t PaddedLayerSize [] = {128, 64, 64, 8};
-    size_t       NumBlocks [] = { 32,  4,  4, 4};
+    size_t PaddedLayerSize [] = {120, 64, 35, 8};
+    size_t       NumBlocks [] = { 24,  8,  7, 8};
 
     char * ModelFileName = "AntTestModel.txt";
     char * DataFileName  = "AntTestData.txt";
-    char * FVPFileName   = "AntTestFVP.txt";
-*/
+    char * FVPFileName    = "AntTestFVP.txt";
 
+/*
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
@@ -2354,7 +2356,7 @@ void Test_FVP_FPGA() {
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";
     char * FVPFileName   = "HumanoidTestFVP.txt";
-
+*/
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;
@@ -2363,7 +2365,7 @@ void Test_FVP_FPGA() {
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 10;
+    Param.NumSamples        = 256;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
@@ -2444,18 +2446,18 @@ void Test_CG_FPGA(size_t NumThreads)
     char * DataFileName  = "SwimmerTestData.txt";
     char * CGFileName    = "SwimmerTestCG.txt";
 */
-/*
+
     // Ant-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {111, 64, 32, 8};
-    size_t PaddedLayerSize [] = {128, 64, 64, 8};
-    size_t       NumBlocks [] = { 32,  4,  4, 4};
+    size_t PaddedLayerSize [] = {120, 64, 35, 8};
+    size_t       NumBlocks [] = { 24,  8,  7, 8};
 
     char * ModelFileName = "AntTestModel.txt";
     char * DataFileName  = "AntTestData.txt";
     char * CGFileName    = "AntTestCG.txt";
-*/
 
+/*
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
@@ -2465,7 +2467,7 @@ void Test_CG_FPGA(size_t NumThreads)
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";
     char * CGFileName    = "HumanoidTestCG.txt";
-
+*/
     TRPOparam Param;
     Param.ModelFile         = ModelFileName;
     Param.DataFile          = DataFileName;
@@ -2474,7 +2476,7 @@ void Test_CG_FPGA(size_t NumThreads)
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 50000;
+    Param.NumSamples        = 500;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
