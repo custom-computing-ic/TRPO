@@ -11,6 +11,7 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Stream.OffsetExpr;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Accumulator;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
 import maxpower.KernelBinaryOp.Add;
@@ -528,15 +529,19 @@ class MidLayer extends KernelLib{
         DFEVector<DFEVar> mult_Ry_part1 = FwdPrevRyLayer * FwdWYCastRY;
         DFEVector<DFEVar> mult_Ry_part2 = FwdPrevLayer * FwdVWYCastY;
         optimization.popPipeliningFactor();
+        optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
         DFEVector<DFEVar> mult_Ry = mult_Ry_part1 + mult_Ry_part2.cast(mult_Ry_part1.getType());
         // Cast Multiplication Result into AccType for Accumulation
-        DFEVector<DFEVar>  mult_y_Acc =  mult_y.cast(new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks));
-        DFEVector<DFEVar> mult_Ry_Acc = mult_Ry.cast(new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks));        
-        DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(),  mult_y_Acc.getElementsAsList());
-        DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry_Acc.getElementsAsList());
+        optimization.pushEnableBitGrowth(true);
+        DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(),  mult_y.getElementsAsList());
+        DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry.getElementsAsList());
+        optimization.popEnableBitGrowth();
         // Cast Bias and VBias into AccType to derive pre-activated value
-        NewPreAc_y[Y]  <== isFirstRow ? MultAdd_y  +  Bias[Y].cast(Def.AccType) : MultAdd_y  + Temp_y[Y];
-        NewPreAc_Ry[Y] <== isFirstRow ? MultAdd_Ry + VBias[Y].cast(Def.AccType) : MultAdd_Ry + Temp_Ry[Y];
+        DFEVar MultAdd_yCast  = MultAdd_y.cast(Def.AccType);
+        DFEVar MultAdd_RyCast = MultAdd_Ry.cast(Def.AccType);
+        NewPreAc_y[Y]  <== isFirstRow ? MultAdd_yCast  +  Bias[Y].cast(Def.AccType) : MultAdd_yCast  + Temp_y[Y];
+        NewPreAc_Ry[Y] <== isFirstRow ? MultAdd_RyCast + VBias[Y].cast(Def.AccType) : MultAdd_RyCast + Temp_Ry[Y];
+        optimization.popPipeliningFactor();
     }
 
     // Prepare Write Back Data
@@ -573,11 +578,11 @@ class MidLayer extends KernelLib{
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         switch (AcFunc) {
             case 't': {
-                optimization.pushPipeliningFactor(Def.PipelineFactorTanH);
-                DFEVar Activated_y = Def.tanh(NewPreAc_y[Y]).cast(Def.RyType);
-                optimization.popPipeliningFactor();
+                DFEVar Activated_y = tanh(NewPreAc_y[Y]).cast(Def.RyType);
                  YVec[Y] <== Activated_y.cast(Def.yType);
+                optimization.pushPipeliningFactor(Def.PipelineFactorMult);
                 RyVec[Y] <== NewPreAc_Ry[Y].cast(Def.RyType) * (1-Activated_y) * (1+Activated_y);
+                optimization.popPipeliningFactor();
                 break;
             }
             case 'l': {
@@ -632,7 +637,9 @@ class MidLayer extends KernelLib{
             // Calculate De-Activation in RGType
             case 't': {
                 DFEVar nextLayerY = BwdNextLayer[Y].cast(Def.RGType);
+                optimization.pushPipeliningFactor(Def.PipelineFactorMult);
                 RGLayer_original[Y] <== BwdNextRGLayer[Y] * (1-nextLayerY)*(1+nextLayerY);
+                optimization.popPipeliningFactor();
                 break;
             }
             case 'l': {
@@ -653,22 +660,29 @@ class MidLayer extends KernelLib{
     // Calculate RGVec when this layer isn't first layer
     RGVec = RGVecType.newInstance(this);
     // For Debug  
-    DFEVector<DFEVar> thisStepMult = (new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks)).newInstance(this);
+//    DFEVector<DFEVar> thisStepMult = (new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks)).newInstance(this);
     if (ID==0) {
         for (int X=0; X<NumInBlocks; ++X) RGVec[X] <== constant.var(Def.RGType, 0);
     }
     else {
         for (int X=0; X<NumInBlocks; ++X) {
             // Calculate Multiplication in RGType
-            DFEVector<DFEVar> mult_RG = RGLayer.get() * BwdWGridVec[X].cast(RGLayer_original.getType());
+            DFEVector<DFEVar> RGLayerX  = RGLayer.get();
+            DFEVector<DFEVar> BwdWGridX = BwdWGridVec[X].cast(RGLayer_original.getType());
+            optimization.pushPipeliningFactor(Def.PipelineFactorMult);
+            DFEVector<DFEVar> mult_RG = RGLayerX * BwdWGridX;
+            optimization.popPipeliningFactor();
             // Cast Multiplication Result into AccType for Accumulation
-            DFEVector<DFEVar> mult_RG_Acc = mult_RG.cast(new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks));
-            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG_Acc.getElementsAsList());
-            DFEVar sum_RG = Reductions.accumulator.makeAccumulator(toAccumulator_RG, BwdAccParam);
+            optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
+            optimization.pushEnableBitGrowth(true);
+            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG.getElementsAsList());
+            optimization.popEnableBitGrowth();
+            DFEVar sum_RG = Reductions.accumulator.makeAccumulator(toAccumulator_RG.cast(Def.AccType), BwdAccParam);
+            optimization.popPipeliningFactor();
             // Cast Result into RGType
             RGVec[X] <== sum_RG.cast(Def.RGType);
             // For Debug
-            thisStepMult[X] <== toAccumulator_RG;
+//            thisStepMult[X] <== toAccumulator_RG;
         }
     }
     
@@ -682,7 +696,9 @@ class MidLayer extends KernelLib{
             DFEVar thisRGW = PrevX * RGLayerY;
             optimization.popPipeliningFactor();
             // Do Accumulation in RGW Type
+            optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
             DFEVar NewRGW = BwdRGWRdGridVec[X][Y] + thisRGW.cast(Def.RGWType);
+            optimization.popPipeliningFactor();
             BwdRGWWrGridVec[X][Y] <== isInitW.get() ? constant.var(Def.RGWType, 0) : stream.offset(NewRGW, -Offset_RGW);
         }
     }
@@ -690,7 +706,10 @@ class MidLayer extends KernelLib{
     // Calculate RGB
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // Do Addition in RGBType
-        DFEVar NewRGB = BwdRGBRead[Y] + RGLayerIndividual[Y].get().cast(Def.RGBType);
+        DFEVar RGLayerY = RGLayerIndividual[Y].get().cast(Def.RGBType);
+        optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
+        DFEVar NewRGB = BwdRGBRead[Y] + RGLayerY;
+        optimization.popPipeliningFactor();
         BwdRGBWrite[Y] <== isInitB ? constant.var(Def.RGBType, 0) : stream.offset(NewRGB, -Offset_RGB);
     }
 
@@ -745,5 +764,24 @@ class MidLayer extends KernelLib{
 
 	}
 
+
+    /////////////////////// Activation Functions ///////////////////////
+
+    // tanh() activation function
+    // Remarks: Consider Function Approximation if hardware resource is very limited
+    public DFEVar tanh(DFEVar input) {
+        DFEVar x = input.cast(Def.AcInType);
+        // Exp
+        optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
+        DFEVar Exp2xPlus1 = KernelMath.exp(2*x, Def.AcExpType) + 1.0;
+        // Div
+        optimization.pushPipeliningFactor(Def.PipelineFactorDiv);
+        DFEVar DivResult = 2.0 / Exp2xPlus1;
+        optimization.popPipeliningFactor();
+        // Sub
+        DFEVar Result = 1.0 - DivResult.cast(Def.yType);
+        optimization.popPipeliningFactor();
+        return Result;
+    }
 
 }
