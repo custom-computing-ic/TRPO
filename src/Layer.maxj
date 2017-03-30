@@ -685,17 +685,16 @@ class Layer extends KernelLib{
     }
     
     // Calculate RGW
-    
     for (int X=0; X<NumInBlocks; ++X) {
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // Calculate Multiplication in RGType
-            DFEVar thisRGW = BwdPrevLayer[X].cast(Def.RGType) * RGLayerIndividual[Y].get();
+            DFEVar thisRGW = (BwdPrevLayer[X].cast(Def.RGType) * RGLayerIndividual[Y].get()).cast(Def.RGWType);
             // Do Accumulation in RGW Type
-            DFEVar NewRGW  = BwdRGWRdGridVec[X][Y] + thisRGW.cast(Def.RGWType);
-            BwdRGWWrGridVec[X][Y] <== isInitW.get() ? constant.var(Def.RGWType, 0) : stream.offset(NewRGW, -Offset_RGW);
+            DFEVar NewRGW    = optimization.pipeline(BwdRGWRdGridVec[X][Y]) + optimization.pipeline(thisRGW);
+            DFEVar RGWWrData = isInitW.get() ? constant.var(Def.RGWType, 0) : stream.offset(NewRGW, -Offset_RGW);
+            BwdRGWWrGridVec[X][Y] <== optimization.pipeline(RGWWrData);
         }
     }
-
 
     // Calculate RGB
     for (int Y=0; Y<NumOutBlocks; ++Y) {
