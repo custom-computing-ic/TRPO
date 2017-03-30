@@ -30,6 +30,7 @@ class Def {
     ///////////////////////// FPGA Settings /////////////////////////
         
     public static final int KernelFrequencyMAX4 = 200;
+    public static final int MaxFanout = 8;
 
 
     ///////////////////////// Data Types /////////////////////////
