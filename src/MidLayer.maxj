@@ -532,16 +532,14 @@ class MidLayer extends KernelLib{
         optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
         DFEVector<DFEVar> mult_Ry = mult_Ry_part1 + mult_Ry_part2.cast(mult_Ry_part1.getType());
         // Cast Multiplication Result into AccType for Accumulation
-        optimization.pushEnableBitGrowth(true);
-        DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(),  mult_y.getElementsAsList());
-        DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry.getElementsAsList());
-        optimization.popEnableBitGrowth();
+        DFEVector<DFEVar>  mult_y_Acc =  mult_y.cast(new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks));
+        DFEVector<DFEVar> mult_Ry_Acc = mult_Ry.cast(new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks));
+        DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(),  mult_y_Acc.getElementsAsList());
+        DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry_Acc.getElementsAsList());
         // Cast Bias and VBias into AccType to derive pre-activated value
-        DFEVar MultAdd_yCast  = MultAdd_y.cast(Def.AccType);
-        DFEVar MultAdd_RyCast = MultAdd_Ry.cast(Def.AccType);
-        NewPreAc_y[Y]  <== isFirstRow ? MultAdd_yCast  +  Bias[Y].cast(Def.AccType) : MultAdd_yCast  + Temp_y[Y];
-        NewPreAc_Ry[Y] <== isFirstRow ? MultAdd_RyCast + VBias[Y].cast(Def.AccType) : MultAdd_RyCast + Temp_Ry[Y];
         optimization.popPipeliningFactor();
+        NewPreAc_y[Y]  <== isFirstRow ? MultAdd_y  +  Bias[Y].cast(Def.AccType) : MultAdd_y  + Temp_y[Y];
+        NewPreAc_Ry[Y] <== isFirstRow ? MultAdd_Ry + VBias[Y].cast(Def.AccType) : MultAdd_Ry + Temp_Ry[Y];
     }
 
     // Prepare Write Back Data
@@ -674,10 +672,9 @@ class MidLayer extends KernelLib{
             optimization.popPipeliningFactor();
             // Cast Multiplication Result into AccType for Accumulation
             optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
-            optimization.pushEnableBitGrowth(true);
-            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG.getElementsAsList());
-            optimization.popEnableBitGrowth();
-            DFEVar sum_RG = Reductions.accumulator.makeAccumulator(toAccumulator_RG.cast(Def.AccType), BwdAccParam);
+            DFEVector<DFEVar> mult_RG_Acc = mult_RG.cast(new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks));
+            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG_Acc.getElementsAsList());
+            DFEVar sum_RG = Reductions.accumulator.makeAccumulator(toAccumulator_RG, BwdAccParam);
             optimization.popPipeliningFactor();
             // Cast Result into RGType
             RGVec[X] <== sum_RG.cast(Def.RGType);

@@ -2476,7 +2476,7 @@ void Test_CG_FPGA(size_t NumThreads)
     Param.LayerSize         = LayerSize;
     Param.PaddedLayerSize   = PaddedLayerSize;
     Param.NumBlocks         = NumBlocks;
-    Param.NumSamples        = 100;
+    Param.NumSamples        = 50000;
     Param.CG_Damping        = 0.1;
 
     // Open Simulation Data File that contains test data
