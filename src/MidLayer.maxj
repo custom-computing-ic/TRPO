@@ -463,7 +463,8 @@ class MidLayer extends KernelLib{
             FwdWGridVec[Y][X] <== WBlock.read(WReadAddr.get());
             // VW Block
             Memory<DFEVar> VWBlock = mem.alloc(Def.DataType, Math.max(BlockSize,2));
-            VWBlock.port(WPortAddr.get(), FwdPrevLayer[X], isInitVW.get() & (Y===InitWYCount.get()), RamWriteMode.WRITE_FIRST);
+//            VWBlock.port(WPortAddr.get(), FwdPrevLayer[X], isInitVW.get() & (Y===InitWYCount.get()), RamWriteMode.WRITE_FIRST);
+            VWBlock.write(WPortAddr.get(), FwdPrevLayer[X], isInitVW.get() & (Y===InitWYCount.get()));
             FwdVWGridVec[Y][X] <== VWBlock.read(WReadAddr.get());
         }
     }
@@ -489,7 +490,8 @@ class MidLayer extends KernelLib{
         for (int Y=0; Y<NumOutBlocks; ++Y) {
             // RGW Block
             Memory<DFEVar> RGWBlock = mem.alloc(Def.RGWType, Math.max(BlockSize,2));
-            RGWBlock.port(BwdRGWWrAddr.get(), BwdRGWWrGridVec[X][Y], BwdRGWWrEn.get(), RamWriteMode.WRITE_FIRST);
+//            RGWBlock.port(BwdRGWWrAddr.get(), BwdRGWWrGridVec[X][Y], BwdRGWWrEn.get(), RamWriteMode.WRITE_FIRST);
+            RGWBlock.write(BwdRGWWrAddr.get(), BwdRGWWrGridVec[X][Y], BwdRGWWrEn.get());
             BwdRGWRdGridVec[X][Y] <== RGWBlock.read(RGWReadAddr.get());
         }
     }

@@ -2350,8 +2350,8 @@ void Test_FVP_FPGA() {
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
-    size_t PaddedLayerSize [] = {384,128, 66,18};
-    size_t       NumBlocks [] = { 32,  8,  6, 6};
+    size_t PaddedLayerSize [] = {384,128, 64,18};
+    size_t       NumBlocks [] = { 48,  4,  8, 2};
 
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";
@@ -2461,8 +2461,8 @@ void Test_CG_FPGA(size_t NumThreads)
     // Humanoid-v1
     char            AcFunc [] = {'l', 't', 't', 'l'};
     size_t       LayerSize [] = {376,128, 64,17};
-    size_t PaddedLayerSize [] = {384,128, 66,18};
-    size_t       NumBlocks [] = { 32,  8,  6, 6};
+    size_t PaddedLayerSize [] = {384,128, 64,18};
+    size_t       NumBlocks [] = { 48,  4,  8, 2};
 
     char * ModelFileName = "HumanoidTestModel.txt";
     char * DataFileName  = "HumanoidTestData.txt";

@@ -21,18 +21,18 @@ class Def {
 //    public static final int  [] NumBlocks = {  4,  4,  4, 4};
 //    public static final int  [] LayerSize = {120, 64, 35, 8};
 //    public static final int  [] NumBlocks = { 24,  8,  7, 8};
-    public static final int  [] LayerSize = {384,128, 66, 18};
-    public static final int  [] NumBlocks = { 32,  8,  6,  6};
+    public static final int  [] LayerSize = {384,128, 64, 18};
+    public static final int  [] NumBlocks = { 48,  4,  8,  2};
 
 
 
     ///////////////////////// FPGA Settings /////////////////////////
         
-    public static final int KernelFrequencyMAX4 = 160;
+    public static final int KernelFrequencyMAX4 = 200;
     public static final int MaxFanout = 16;
-    public static final double PipelineFactorDiv     = 0.2;
-    public static final double PipelineFactorMult    = 0.3;
-    public static final double PipelineFactorDefault = 0.7;
+    public static final double PipelineFactorDiv     = 1.0;
+    public static final double PipelineFactorMult    = 1.0;
+    public static final double PipelineFactorDefault = 1.0;
 
 
     ///////////////////////// Data Types /////////////////////////
