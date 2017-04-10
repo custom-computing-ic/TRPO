@@ -475,11 +475,13 @@ class MidLayer extends KernelLib{
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // B Block
         Memory<DFEVar> BBlock = mem.alloc(Def.DataType, Math.max(OutBlockDim,2));
-        BBlock.port(BPortAddr.get(), BiasInitData, isInitB & (Y===InitBYCount), RamWriteMode.WRITE_FIRST);
+//        BBlock.port(BPortAddr.get(), BiasInitData, isInitB & (Y===InitBYCount), RamWriteMode.WRITE_FIRST);
+        BBlock.write(BPortAddr.get(), BiasInitData, isInitB & (Y===InitBYCount));
         Bias[Y] <== BBlock.read(BReadAddr.get());
         // VB Block
         Memory<DFEVar> VBBlock = mem.alloc(Def.DataType, Math.max(OutBlockDim,2));
-        VBBlock.port(BPortAddr.get(), BiasInitData, isInitVB & (Y===InitBYCount), RamWriteMode.WRITE_FIRST);
+//        VBBlock.port(BPortAddr.get(), BiasInitData, isInitVB & (Y===InitBYCount), RamWriteMode.WRITE_FIRST);
+        VBBlock.write(BPortAddr.get(), BiasInitData, isInitVB & (Y===InitBYCount));
         VBias[Y] <== VBBlock.read(BReadAddr.get());
     }
 
@@ -502,7 +504,8 @@ class MidLayer extends KernelLib{
     for (int Y=0; Y<NumOutBlocks; ++Y) {
         // RGB Block
         Memory<DFEVar> RGBBlock = mem.alloc(Def.RGBType, Math.max(OutBlockDim,2));
-        RGBBlock.port(BwdRGBWrAddr.get(), BwdRGBWrite[Y], BwdRGBWrEn.get(), RamWriteMode.WRITE_FIRST);
+//        RGBBlock.port(BwdRGBWrAddr.get(), BwdRGBWrite[Y], BwdRGBWrEn.get(), RamWriteMode.WRITE_FIRST);
+        RGBBlock.write(BwdRGBWrAddr.get(), BwdRGBWrite[Y], BwdRGBWrEn.get());
         BwdRGBRead[Y] <== RGBBlock.read(RGBReadAddr.get());
     }
 
