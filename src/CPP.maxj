@@ -10,25 +10,25 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
 import java.lang.Math;
 
 /**
- * Propagation: Several layers connected together to formulate a neural network
+ * Customised Pearlmutter Propagation (CPP): Multiple OddLayer and EvenLayer instances connected together to compute FVP.
  *
  * @author Patrick Shao
  *
  * @param <NumLayers> Number of layers in the network: [Input] --> [Hidden 1] --> [Hidden 2] --> [Output] is 4 layers.
- * @param <LayerSize> Size of each layer in the network
+ * @param <LayerSize> Padded Layer Size of each layer in the network
  * @param <NumBlocks> Parallelism Factor in each layer, the vector of that layer's width will be NumBlocks
  * @param <AcFunc> Activation Function of each layer, note that AcFunc[0] is not used as Observation is given
  * @param <NumSamples> Number of samples to process (size of the data set)
  * @param <Observation> Input to the first layer (observation data)
  *                      Note: During Initialisation, Observation is used to stream W and VW for each layer
  * @param <BiasStdInitData> Initialisation Data for Bias, VBias and Std
- *                      Note: BiasStdInitData is Bias and VBias for each layer, to be followed by Std
- * @param <beginInit> begin initialisation. Weight initialisation and bias initialisation are independent.
+ *                          Note: BiasStdInitData is Bias and VBias for each layer, to be followed by Std
+ * @param <beginInit> begin initialisation. Weight initialisation and bias initialisation happen concurrently.
  *
  */
 
 
-class FVP extends KernelLib{
+class CPP extends KernelLib{
 
     private DFEVar EnObservationInput;
     private DFEVar EnBiasStdInput;
@@ -41,7 +41,7 @@ class FVP extends KernelLib{
     public DFEVar isFVPResultValid()            {return FVPResultValid;}
 
 
-    FVP(  KernelLib owner,
+    CPP(  KernelLib owner,
           int NumLayers,
           int [] LayerSize,
           int [] NumBlocks,
@@ -95,6 +95,7 @@ class FVP extends KernelLib{
     DFEVectorType<DFEVar> RG1_Type = new DFEVectorType<DFEVar>(Def.RGType, NumBlocks[1]);
     DFEVectorType<DFEVar> RG2_Type = new DFEVectorType<DFEVar>(Def.RGType, NumBlocks[2]);
     DFEVectorType<DFEVar> RG3_Type = new DFEVectorType<DFEVar>(Def.RGType, NumBlocks[3]);
+
 
     /////////////////////// Total Counter ///////////////////////
 
@@ -274,7 +275,7 @@ class FVP extends KernelLib{
     DFEVector<DFEVar> Bwd_RG_1    = RG1_Type.newInstance(this);
     DFEVar beginBwdPropFst = dfeUInt(1).newInstance(this);    
 
-    Layer FstLayer = new Layer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], Bwd_Fst_CycleTime,
+    OddLayer FstLayer = new OddLayer(this, 0, AcFunc[1], BlockDim[0], NumBlocks[0], BlockDim[1], NumBlocks[1], Bwd_Fst_CycleTime,
                                      y_0_in, Bwd_y_0_Fst, Ry_0, Bwd_y_1, Bwd_RG_1, BiasStdInitData, beginWeightInitFstLayer,
                                      beginBiasInitFstLayer, beginFwdPropFst, beginBwdPropFst, beginReadBackFstLayer);
     
@@ -321,7 +322,7 @@ class FVP extends KernelLib{
     DFEVector<DFEVar> Bwd_RG_2    = RG2_Type.newInstance(this);
     DFEVar beginBwdPropSnd        = dfeUInt(1).newInstance(this);
 
-    MidLayer SndLayer = new MidLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2], Fwd_Snd_CycleTime,
+    EvenLayer SndLayer = new EvenLayer(this, 1, AcFunc[2], BlockDim[1], NumBlocks[1], BlockDim[2], NumBlocks[2], Fwd_Snd_CycleTime,
                                            y_1_in, Bwd_y_1_Snd, Ry_1, Bwd_y_2, Bwd_RG_2, BiasStdInitData, beginWeightInitSndLayer,
                                             beginBiasInitSndLayer, beginFwdPropSnd, beginBwdPropSnd, beginReadBackSndLayer);
 
@@ -387,7 +388,7 @@ class FVP extends KernelLib{
     DFEVector<DFEVar> Bwd_RG_3    = RG3_Type.newInstance(this);
     DFEVar beginBwdPropTrd        = beginBwdProp;
     
-    Layer TrdLayer = new Layer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], Bwd_Trd_CycleTime,
+    OddLayer TrdLayer = new OddLayer(this, 2, AcFunc[3], BlockDim[2], NumBlocks[2], BlockDim[3], NumBlocks[3], Bwd_Trd_CycleTime,
                                      y_2_in, Bwd_y_2_Trd, Ry_2, Bwd_y_3, Bwd_RG_3, BiasStdInitData, beginWeightInitTrdLayer,
                                      beginBiasInitTrdLayer, beginFwdPropTrd, beginBwdPropTrd, beginReadBackTrdLayer);
 
@@ -469,6 +470,7 @@ class FVP extends KernelLib{
 
 
     /////////////////////// Debug ///////////////////////
+
 /*
     // Tick
     DFEVar Tick = control.count.simpleCounter(32);
@@ -484,7 +486,6 @@ class FVP extends KernelLib{
     
     
     // Back Propagation Results
-
 //    debug.simPrintf(beginBwdPropTrd, "[%4d] Begin Third Layer Back Propagation...\n", Tick);
 //    debug.simPrintf(TrdLayer.isBwdValid(), "[%4d] RG_2[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", Tick, Bwd_RG_2_toBuffer[0], Bwd_RG_2_toBuffer[1], Bwd_RG_2_toBuffer[2], Bwd_RG_2_toBuffer[3]);
 

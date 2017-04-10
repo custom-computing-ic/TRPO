@@ -6,13 +6,14 @@ import java.lang.Math;
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelConfiguration;
 import com.maxeler.maxcompiler.v2.utils.Bits;
 
-public class LayerTest {
+public class OddLayerTest {
 
     private final char      AcFunc = 't';
     private final int   InBlockDim = 2;
@@ -24,9 +25,9 @@ public class LayerTest {
     private final int BiasInitCycles   = 2 * OutBlockDim * NumOutBlocks;
     private final int FwdPropCycles    = InBlockDim * OutBlockDim;
 
-    private class LayerTestKernel extends Kernel {
+    private class OddLayerTestKernel extends Kernel {
 
-        LayerTestKernel(KernelParameters parameters, int ID)
+        OddLayerTestKernel(KernelParameters parameters, int ID)
         {
 
         super(parameters);
@@ -56,22 +57,23 @@ public class LayerTest {
         ///////////////////////// Computing /////////////////////////
 
         // Inputs
-        DFEVectorType<DFEVar> InVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
-        DFEVector<DFEVar>     PrevLayer = io.input("PrevLayer",   InVecType, isWeightInit | isCalculating);
-        DFEVector<DFEVar>   PrevRyLayer = io.input("PrevRyLayer", InVecType, isCalculating);        
+        DFEVectorType<DFEVar>  yVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
+        DFEVectorType<DFEVar> RyVecType = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
+        DFEVector<DFEVar>     PrevLayer = io.input("PrevLayer",    yVecType, isWeightInit | isCalculating);
+        DFEVector<DFEVar>   PrevRyLayer = io.input("PrevRyLayer", RyVecType, isCalculating);        
         DFEVar             BiasInitData = io.input("BiasInitData", Def.DataType, isBiasInit);
 
         // Inputs for Back Propagation - provide dummy inputs
         int InBlockDimCycleTime = 20;
         DFEVector<DFEVar> BwdPrevLayer   = constant.vect(NumInBlocks,  Def.DataType, 0);
         DFEVector<DFEVar> BwdNextLayer   = constant.vect(NumOutBlocks, Def.DataType, 0);
-        DFEVector<DFEVar> BwdNextRGLayer = constant.vect(NumOutBlocks, Def.DataType, 0);
+        DFEVector<DFEVar> BwdNextRGLayer = constant.vect(NumOutBlocks, Def.RGType,   0);
         DFEVar beginBwdProp  = constant.var(dfeUInt(1), 0);
         DFEVar beginReadBack = constant.var(dfeUInt(1), 0);
         
         // Layer Block
         @SuppressWarnings("unused")
-        Layer TestLayer = new Layer(this, ID, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks, InBlockDimCycleTime,
+        OddLayer TestLayer = new OddLayer(this, ID, AcFunc, InBlockDim, NumInBlocks, OutBlockDim, NumOutBlocks, InBlockDimCycleTime,
                                     PrevLayer, BwdPrevLayer, PrevRyLayer, BwdNextLayer, BwdNextRGLayer,
                                     BiasInitData, beginInit, beginInit, beginFwdProp, beginBwdProp, beginReadBack);
 
@@ -98,9 +100,9 @@ public class LayerTest {
         final int   NumWeights = InLayerSize * OutLayerSize;
         
         // Kernel
-        SimulationManager  mgr = new SimulationManager("LayerTest");
+        SimulationManager  mgr = new SimulationManager("OddLayerTest");
         mgr.getCurrentKernelConfig().simulation.setRAMAddressCollisionBehaviour(KernelConfiguration.SimulationOptions.SimulationBehaviour.IGNORE);
-        LayerTestKernel kernel = new LayerTestKernel(mgr.makeKernelParameters(), ID);
+        OddLayerTestKernel kernel = new OddLayerTestKernel(mgr.makeKernelParameters(), ID);
         mgr.setKernel(kernel);
 
 
@@ -155,7 +157,7 @@ public class LayerTest {
         }        
 
         // PrevLayerData into Kernel
-        List<Bits> PrevLayer = VectorDataGenerator(PrevLayerData, WeightInitCycles+InBlockDim*OutBlockDim, NumInBlocks);   
+        List<Bits> PrevLayer = VectorDataGenerator(Def.DataType, PrevLayerData, WeightInitCycles+InBlockDim*OutBlockDim, NumInBlocks);   
         mgr.setInputDataRaw("PrevLayer", PrevLayer);
         
 
@@ -179,7 +181,7 @@ public class LayerTest {
         }
         
         // Feed PrevRyLayerData into Kernel
-        List<Bits> PrevRyLayer = VectorDataGenerator(PrevRyLayerData, InBlockDim*OutBlockDim, NumInBlocks);
+        List<Bits> PrevRyLayer = VectorDataGenerator(Def.RGType, PrevRyLayerData, InBlockDim*OutBlockDim, NumInBlocks);
         mgr.setInputDataRaw("PrevRyLayer", PrevRyLayer);
         
         
@@ -231,12 +233,12 @@ public class LayerTest {
     }
     
     // Input Data Generator
-    public static List<Bits> VectorDataGenerator(double [][] data, int VectorDepth, int VectorWidth) {
+    public static List<Bits> VectorDataGenerator(DFEType Type, double [][] data, int VectorDepth, int VectorWidth) {
         final List<Bits> encodedData = new ArrayList<Bits>(VectorDepth);
         for (int i=0; i<VectorDepth; ++i) {
-            Bits thisStepBits = Def.DataType.encodeConstant(data[i][0]);
+            Bits thisStepBits = Type.encodeConstant(data[i][0]);
             for (int j=1; j<VectorWidth; ++j){
-                thisStepBits = Def.DataType.encodeConstant(data[i][j]).cat(thisStepBits);
+                thisStepBits = Type.encodeConstant(data[i][j]).cat(thisStepBits);
             }
             encodedData.add(thisStepBits);
         }

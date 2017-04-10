@@ -16,6 +16,7 @@ class TRPOKernel extends Kernel {
 
     /////////////////////// Parameters ///////////////////////
     
+    // Note: LayerSize here should be padded number
     int NumLayers     = Def.NumLayers;
     int  [] LayerSize = Def.LayerSize;
     int  [] NumBlocks = Def.NumBlocks;
@@ -51,8 +52,8 @@ class TRPOKernel extends Kernel {
 
     /////////////////////// Fisher Vector Product Computation ///////////////////////
 
-    // Fisher Vector Product
-    FVP FVPCalc = new FVP(this, NumLayers, LayerSize, NumBlocks, AcFunc, NumSamples, Observation, BiasStdInitData, beginFVP);
+    // Calculating Fisher Vector Product (FVP) via Customised Pearlmutter Propagation (CPP)
+    CPP FVPCalc = new CPP(this, NumLayers, LayerSize, NumBlocks, AcFunc, NumSamples, Observation, BiasStdInitData, beginFVP);
     EnObservationInput <== FVPCalc.getEnObservationInput();
     EnBiasStdInput     <== FVPCalc.getEnBiasStdInput();
     DFEVar FVPResult     = FVPCalc.getFVPResult();

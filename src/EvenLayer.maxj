@@ -21,50 +21,51 @@ import maxpower.FanoutLimiter;
 import java.lang.Math;
 
 /**
- * A layer of both forward propagation and back propagation
+ * Even Layer: Type B Forward Propagation and Type A Back Propagation
  *
  * @author Patrick Shao
  *
  * @param <ID> The ID of this Layer
- *             Note: Set ID to 0 for input layer, so that FwdPrevRyLayer will be ignored as values are zero. 
  * @param <AcFunc> Activation Function of this Layer
  * @param <InBlockDim> Block Dimension of the Input Vector
- * @param <NumInBlocks> Number of Input Blocks => InputDim = InBlockDim * NumInBlocks
+ * @param <NumInBlocks> Number of Input Blocks. We have PaddedInputLayerSize = InBlockDim * NumInBlocks
  * @param <OutBlockDim> Block Dimension of the Output Vector
- * @param <NumOutBlocks> Number of Output Blocks => OutputDim = OutBlockDim * NumOutBlocks
- * @param <InBlockDimCycleTime> Number of cycles needed for each inner loop, see description below
+ * @param <NumOutBlocks> Number of Output Blocks. We have PaddedOutputLayerSize = OutBlockDim * NumOutBlocks
+ * @param <OutBlockDimCycleTime> Number of cycles needed for each inner loop during forward propagation, see below
  *                               Note: a) A new vector comes every InputLatency cycles.
- *                                     b) In each inner loop there are InBlockDim items to process.
+ *                                     b) In each inner loop there are OutBlockDim items to process.
  *                                     c) The computation latency within this block is CompLatency cycles.
  *                                        This can be checked with stream offset value
- *                                     ==> OutBlockDimCycleTime = max(InputLatency, InBlockDim, CompLatency)
- *                                     TotalNumCycles = OutBlockDimCycleTime * OutBlockDim 
- * @param <FwdPrevLayer> y values of previous layer, width should be NumInBlocks.
+ *                                     ==> OutBlockDimCycleTime = max(InputLatency, OutBlockDim, CompLatency)
+ *                                     TotalNumCycles = OutBlockDimCycleTime * InBlockDim
+ * @param <FwdPrevLayer> y values of previous layer for forward propagation, width should be NumInBlocks.
  *                       Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
- *                       Note: during initialisation, FwdPrevLayer is used to stream in W and VW.
- * @param <BwdPrevLayer> y values of previous layer, width should be NumInBlocks.
+ *                       Note: during initialisation, PrevLayer is used to stream in W and VW.
+ * @param <BwdPrevLayer> y values of previous layer for back propagation, width should be NumInBlocks.
  *                       Iterating every outer iteration.
- * @param <FwdPrevRyLayer> Ry values of previous layer, width should be NumInBlocks
+ * @param <FwdPrevRyLayer> Ry values of previous layer for forward propagation, width should be NumInBlocks
  *                         Iterating every cycle during computation, using InBlockDim cycles to finish 1 Input Vector
- * @param <BwdNextLayer> y values from next layer, width should be NumOutBlocks.
+ * @param <BwdNextLayer> y values from next layer for back propagation, width should be NumOutBlocks.
  *                       Iterating every cycle during back propagation.
- * @param <BwdNextRGLayer> Incoming RGLayer values, width should be NumOutBlocks.
- *                         Iterating every cycle during back propagation.
+ * @param <BwdNextRGLayer> Incoming RGLayer values for back propagation, width should be NumOutBlocks.
+ *                         Iterating every cycle during back propagation. 
  * @param <BiasInitData> Initialisation Data for Bias and VBias
  * @param <beginWeightInit> begin Weight Initialisation - using FwdPrevLayer to stream in W and VW
  * @param <beginBiasInit> begin Bias Initialisation - using BiasInitData to stream in B and VB
  * @param <beginFwdProp> begin forward propagation
  * @param <beginBwdProp> begin back propagation
- * @param <beginReadBack> begin read back RGW and RGB, which are the fisher vector product
+ * @param <beginReadBack> begin read back RGW and RGB, which are the Fisher Vector Product
+ *
+ * Remarks: For Altera platform, we use write() instead of port() to prevent Quartus from duplicating BRAM
  *
  */
 
-class Layer extends KernelLib{
+class EvenLayer extends KernelLib{
 
     private DFEVector<DFEVar> YVec;
     private DFEVector<DFEVar> RyVec;
     private DFEVector<DFEVar> RGVec;
-    private DFEVector<DFEVar> BwdYVec;
+    private DFEVector<DFEVar> BwdYVec;    
     private DFEVar FwdInputReadOffsetAddr;
     private DFEVar FwdFirstItemReady;
     private DFEVar FwdValid;
@@ -78,7 +79,7 @@ class Layer extends KernelLib{
     public DFEVector<DFEVar> getY()                     {return YVec;}
     public DFEVector<DFEVar> getRy()                    {return RyVec;}
     public DFEVector<DFEVar> getRG()                    {return RGVec;}
-    public DFEVector<DFEVar> getBwdYVec()               {return BwdYVec;}
+    public DFEVector<DFEVar> getBwdYVec()               {return BwdYVec;}    
     public DFEVar getFwdInputReadOffsetAddr()           {return FwdInputReadOffsetAddr;}
     public DFEVar isFwdFirstItemReady()                 {return FwdFirstItemReady;}
     public DFEVar isFwdValid()                          {return FwdValid;}
@@ -88,38 +89,39 @@ class Layer extends KernelLib{
     public DFEVar isBwdValid()                          {return BwdValid;}
     public DFEVar getRGReadBackData()                   {return RGReadBackData;}
     public DFEVar isRGReadBackValid()                   {return RGReadBackValid;}
-    
+
 	
-    Layer(  KernelLib owner,
-            int ID,
-            char AcFunc,
-            int InBlockDim,
-            int NumInBlocks,
-            int OutBlockDim,
-            int NumOutBlocks,
-            int InBlockDimCycleTime,
-            DFEVector<DFEVar> FwdPrevLayer,
-            DFEVector<DFEVar> BwdPrevLayer,
-            DFEVector<DFEVar> FwdPrevRyLayer,
-            DFEVector<DFEVar> BwdNextLayer,
-            DFEVector<DFEVar> BwdNextRGLayer,
-            DFEVar BiasInitData,
-            DFEVar beginWeightInit,
-            DFEVar beginBiasInit,
-            DFEVar beginFwdProp,
-            DFEVar beginBwdProp,
-            DFEVar beginReadBack)
+    EvenLayer(  KernelLib owner,
+                int ID,
+                char AcFunc,
+                int InBlockDim,
+                int NumInBlocks,
+                int OutBlockDim,
+                int NumOutBlocks,
+                int OutBlockDimCycleTime,
+                DFEVector<DFEVar> FwdPrevLayer,
+                DFEVector<DFEVar> BwdPrevLayer,
+                DFEVector<DFEVar> FwdPrevRyLayer,
+                DFEVector<DFEVar> BwdNextLayer,
+                DFEVector<DFEVar> BwdNextRGLayer,                
+                DFEVar BiasInitData,
+                DFEVar beginWeightInit,
+                DFEVar beginBiasInit,
+                DFEVar beginFwdProp,
+                DFEVar beginBwdProp,
+                DFEVar beginReadBack)
     {
 
     super(owner);
 
     /////////////////////// Parameters ///////////////////////
     
-    // Argument Check - Check if InBlockDimCycleTime is too small  
-    if (InBlockDimCycleTime<5) {
-        System.out.println("[Warning] Layer["+ID+"] InBlockDimCycleTime = "+InBlockDimCycleTime+", which is really small.");
-        System.out.println("[Warning] Layer["+ID+"] Must make sure InBlockDimCycleTime > Layer"+ID+"Offset_RG");
-        System.out.println("[Warning] Layer["+ID+"] Otherwise the Backpropagation Results may not be correct.");
+    // Argument Check - Warn if OutBlockDimCycleTime seems to be too small 
+    if (OutBlockDimCycleTime<4) {
+        System.out.println("[Warning] Layer["+ID+"] OutBlockDimCycleTime = "+OutBlockDimCycleTime+", which is really small.");
+        System.out.println("[Warning] Layer["+ID+"] Must make sure OutBlockDimCycleTime > MidLayer"+ID+"Offset_y");
+        System.out.println("[Warning] Layer["+ID+"] Must make sure OutBlockDimCycleTime > MidLayer"+ID+"Offset_Ry");
+        System.out.println("[Warning] Layer["+ID+"] Otherwise the Forward Propagation Results may not be correct.");
     }
 
 
@@ -129,6 +131,7 @@ class Layer extends KernelLib{
     DFEVectorType<DFEVar>  InVecType    = new DFEVectorType<DFEVar>(Def.DataType, NumInBlocks);
     DFEVectorType<DFEVar> OutVecType    = new DFEVectorType<DFEVar>(Def.DataType, NumOutBlocks);
     DFEVectorType<DFEVar>  RGVecType    = new DFEVectorType<DFEVar>(Def.RGType,   NumInBlocks);
+    DFEVectorType<DFEVar> AccVecType    = new DFEVectorType<DFEVar>(Def.AccType,  NumOutBlocks);
     DFEVectorType<DFEVar> RGWVecType    = new DFEVectorType<DFEVar>(Def.RGWType,  NumOutBlocks);
     DFEVectorType<DFEVar> RGBVecType    = new DFEVectorType<DFEVar>(Def.RGBType,  NumOutBlocks);
     DFEVectorType<DFEVector<DFEVar>> FwdGridVecType = new DFEVectorType<DFEVector<DFEVar>>(InVecType, NumOutBlocks);
@@ -232,39 +235,40 @@ class Layer extends KernelLib{
     DFEVar FwdReset = beginFwdProp;
 
     // Top Level Control
-    AddrGenerator FwdCounter = new AddrGenerator(owner, 1, BlockSize, FwdReset);
+    AddrGenerator FwdCounter = new AddrGenerator(owner, 1, OutBlockDimCycleTime*InBlockDim, FwdReset);
     DFEVar isFwdCalculating = FwdCounter.isValid();
-
-    // Row Address in InBlockDim domain - to be used by Weight
-    Count.Params FwdRowAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(InBlockDim),1))
-                                                  .withInitValue(0)
-                                                  .withMax(InBlockDim)
-                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                  .withReset(FwdReset);
-    Counter FwdRowAddrCounter = control.count.makeCounter(FwdRowAddrCounterParam);
-    DFEVar FwdRowAddr = FwdRowAddrCounter.getCount();
+    
+    // Begin New Row
+    Count.Params NewRowCounterParam = control.count.makeParams(16)
+                                                   .withInitValue(0)
+                                                   .withMax(OutBlockDimCycleTime)
+                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                   .withReset(FwdReset);
+    Counter NewRowCounter = control.count.makeCounter(NewRowCounterParam);
+    DFEVar beginNewRow = (NewRowCounter.getCount() === 0) & isFwdCalculating;
 
     // Col Address in OutBlockDim domain - to be used by Weight, Bias and Temp Result
-    Count.Params FwdColAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(OutBlockDim),1))
-                                                  .withInitValue(0)
-                                                  .withMax(OutBlockDim)
-                                                  .withEnable(FwdRowAddrCounter.getWrap())
-                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                  .withReset(FwdReset);
-    Counter FwdColAddrCounter = control.count.makeCounter(FwdColAddrCounterParam);
-    DFEVar FwdColAddr = FwdColAddrCounter.getCount();
+    AddrGenerator FwdColAddrCounter = new AddrGenerator(owner, 1, OutBlockDim, beginNewRow);
+    DFEVar FwdColAddr = FwdColAddrCounter.getAddr();
+    DFEVar FwdColAddrValid = FwdColAddrCounter.isValid() & isFwdCalculating;
 
-    // Read Address - vertical in our case
+    // Row Address in InBlockDim domain - to be used by Weight
+    DFEVar FwdIncRowAddrNextTick = NewRowCounter.getWrap();
+    AddrGenerator FwdRowAddrCounter = new AddrGenerator(owner, 1, InBlockDim, FwdReset, FwdIncRowAddrNextTick);
+    DFEVar FwdRowAddr = FwdRowAddrCounter.getAddr();
+    DFEVar isFirstRow = (FwdRowAddr === 0);
+
+    // Weight Read Address
     DFEVar FwdWReadAddr = FwdRowAddr.cast(AddrType) * OutBlockDim + FwdColAddr.cast(AddrType);
-
+    
     // Offset Read Address for the Input Vector - for previous LayerBuffer
     FwdInputReadOffsetAddr = FwdRowAddr;
-    
-    // The first item of the result is ready at the end of the first iteration
-    FwdFirstItemReady = isFwdCalculating & FwdRowAddrCounter.getWrap() & (FwdColAddr === 0);
-    
-    // The result is valid on the last cycle of each inner loop iteration
-    FwdValid = isFwdCalculating & FwdRowAddrCounter.getWrap();
+
+    // The first item of the result is ready at the beginning of the last iteration
+    FwdFirstItemReady = (FwdRowAddr === InBlockDim-1) & beginNewRow & isFwdCalculating;
+
+    // Is Fwd Output Valid
+    FwdValid = (FwdRowAddr === InBlockDim-1) & FwdColAddrValid;
 
 
 
@@ -280,49 +284,49 @@ class Layer extends KernelLib{
     DFEVar BwdReset = beginBwdProp;
 
     // Top Level Control
-    AddrGenerator BwdCounter = new AddrGenerator(owner, 1, InBlockDimCycleTime*OutBlockDim, BwdReset);
+    AddrGenerator BwdCounter = new AddrGenerator(owner, 1, BlockSize, BwdReset);
+    DFEVar BwdCount = BwdCounter.getAddr();
     DFEVar isBwdCalculating = BwdCounter.isValid();
-    
-    // Begin New Column
-    Count.Params NewColCounterParam = control.count.makeParams(16)
-                                                   .withInitValue(0)
-                                                   .withMax(InBlockDimCycleTime)
-                                                   .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
-                                                   .withReset(BwdReset);
-    Counter NewColCounter = control.count.makeCounter(NewColCounterParam);
-    DFEVar beginNewCol = (NewColCounter.getCount() === 0) & isBwdCalculating;
 
-    // Row Address in InBlockDim domain - to be used by Weight and Temp Result
-    AddrGenerator BwdRowAddrCounter = new AddrGenerator(owner, 1, InBlockDim, beginNewCol);
-    DFEVar BwdRowAddr = BwdRowAddrCounter.getAddr();
-    DFEVar BwdRowAddrValid = BwdRowAddrCounter.isValid() & isBwdCalculating;
+    // Col Address in OutBlockDim domain - to be used by Weight, Bias and Temp Result
+    Count.Params BwdColAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(OutBlockDim),1))
+                                                  .withInitValue(0)
+                                                  .withMax(OutBlockDim)
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(BwdReset);
+    Counter BwdColAddrCounter = control.count.makeCounter(BwdColAddrCounterParam);
+    DFEVar BwdColAddr = BwdColAddrCounter.getCount();
 
-    // Col Address in OutBlockDim domain - to be used by Weight
-    DFEVar BwdIncColAddrNextTick = NewColCounter.getWrap();
-    AddrGenerator BwdColAddrCounter = new AddrGenerator(owner, 1, OutBlockDim, BwdReset, BwdIncColAddrNextTick);
-    DFEVar BwdColAddr = BwdColAddrCounter.getAddr();
-    DFEVar isFirstCol = (BwdColAddr === 0);
+    // Row Address in InBlockDim domain - to be used by Weight, Bias and Temp Result
+    Count.Params BwdRowAddrCounterParam = control.count.makeParams(Math.max(MathUtils.bitsToAddress(InBlockDim),1))
+                                                  .withInitValue(0)
+                                                  .withMax(InBlockDim)
+                                                  .withEnable(BwdColAddrCounter.getWrap())
+                                                  .withWrapMode(WrapMode.COUNT_LT_MAX_THEN_WRAP)
+                                                  .withReset(BwdReset);
+    Counter BwdRowAddrCounter = control.count.makeCounter(BwdRowAddrCounterParam);
+    DFEVar BwdRowAddr = BwdRowAddrCounter.getCount();
 
-    // Weight Read Address
+    // Read Address - horizontal in our case
     DFEVar BwdWReadAddr = BwdRowAddr.cast(AddrType) * OutBlockDim + BwdColAddr.cast(AddrType);
-    
-    // Offset Read Address for the BwdNextLayer Vector - for BwdNextLayer and BwdNextRGLayer
+
+    // Offset Read Address for the BwdNextLayer Vector
     BwdNextLayerReadOffsetAddr = BwdColAddr;
     
     // Offset Read Address for the BwdPrevLayer Vector
     BwdPrevLayerReadOffsetAddr = BwdRowAddr;
+    
+    // The first item of the result is ready at the end of the first iteration
+    BwdFirstItemReady = isBwdCalculating & BwdColAddrCounter.getWrap() & (BwdRowAddr === 0);
+    
+    // The result is valid on the last cycle of each inner loop iteration
+    BwdValid = isBwdCalculating & BwdColAddrCounter.getWrap();
 
-    // The first item of the result is ready at the beginning of the last iteration
-    BwdFirstItemReady = (BwdColAddr === OutBlockDim-1) & beginNewCol & isBwdCalculating;
+    // RGW Update is valid during Back Propagation
+    DFEVar isRGWUpdating = isBwdCalculating;
 
-    // Is Fwd Output Valid
-    BwdValid = (BwdColAddr === OutBlockDim-1) & BwdRowAddrValid;
-
-    // RGW Update is valid when Back Propagation Row Address is Valid
-    DFEVar isRGWUpdating = BwdRowAddrValid;
-
-    // RGB Update is valid on the first cycle in each inner loop
-    DFEVar isRGBUpdating = isBwdCalculating & beginNewCol;
+    // RGB Update is valid on the first inner loop
+    DFEVar isRGBUpdating = isBwdCalculating & (BwdCount < OutBlockDim);
 
 
 
@@ -339,7 +343,7 @@ class Layer extends KernelLib{
     int RGBReadBackCycles = OutBlockDim * NumOutBlocks;
     int ReadBackCycles    = RGWReadBackCycles + RGBReadBackCycles;
 
-    // RGW Read Back Reset
+    // RG Read Back Reset
     DFEVar RGReadBackReset = beginReadBack;
 
     // Top Level Control    
@@ -448,7 +452,7 @@ class Layer extends KernelLib{
 
 
     /////////////////////// Memory Allocation ///////////////////////
-    
+
     // Weight and VWeight Memory Blocks
     DFEVector<DFEVector<DFEVar>>  FwdWGridVec = FwdGridVecType.newInstance(this);
     DFEVector<DFEVector<DFEVar>>  BwdWGridVec = BwdGridVecType.newInstance(this);
@@ -517,106 +521,107 @@ class Layer extends KernelLib{
 
     /////////////////////// Calculation - Forward Propagation ///////////////////////
 
-    // Accumulator Parameter
-    Accumulator.Params FwdAccParam = Reductions.accumulator.makeAccumulatorConfig(Def.AccType)
-                                                     .withEnable(isFwdCalculating)
-                                                     .withClear(stream.offset(FwdRowAddr, 1)===0);
-    // For Debug
-//    DFEVector<DFEVar> PrevAcY  = (new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks)).newInstance(this);
-//    DFEVector<DFEVar> PrevAcRy = (new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks)).newInstance(this);
-
-    // Calculate Y and Ry
-    YVec  = (new DFEVectorType<DFEVar>(Def.yType,  NumOutBlocks)).newInstance(this);
-    RyVec = (new DFEVectorType<DFEVar>(Def.RyType, NumOutBlocks)).newInstance(this);
+    // Calculate Pre-activated Y and Ry
+    DFEVector<DFEVar> Temp_y      = AccVecType.newInstance(this);
+    DFEVector<DFEVar> Temp_Ry     = AccVecType.newInstance(this);
+    DFEVector<DFEVar> NewPreAc_y  = AccVecType.newInstance(this);
+    DFEVector<DFEVar> NewPreAc_Ry = AccVecType.newInstance(this);
     for (int Y=0; Y<NumOutBlocks; ++Y) {
-        // Calculate Multiplication using the type that has larger range
-        DFEVector<DFEVar> WGridY = FwdWGridVec[Y].cast(FwdPrevLayer.getType());
+        // Calculate Multiplication with DataType
+        DFEVector<DFEVar> FwdWYCastY  = FwdWGridVec[Y].cast(FwdPrevLayer.getType());
+        DFEVector<DFEVar> FwdWYCastRY = FwdWGridVec[Y].cast(FwdPrevRyLayer.getType());
+        DFEVector<DFEVar> FwdVWYCastY = FwdVWGridVec[Y].cast(FwdPrevLayer.getType());
         optimization.pushPipeliningFactor(Def.PipelineFactorMult);
-        DFEVector<DFEVar> mult_y = FwdPrevLayer * WGridY;
+        DFEVector<DFEVar> mult_y = FwdPrevLayer * FwdWYCastY;
+        DFEVector<DFEVar> mult_Ry_part1 = FwdPrevRyLayer * FwdWYCastRY;
+        DFEVector<DFEVar> mult_Ry_part2 = FwdPrevLayer * FwdVWYCastY;
         optimization.popPipeliningFactor();
-        DFEVector<DFEVar> mult_Ry;
-        if (ID==0) {
-            DFEVector<DFEVar> FwdVWY = FwdVWGridVec[Y].cast(FwdPrevLayer.getType());
-            optimization.pushPipeliningFactor(Def.PipelineFactorMult);
-            mult_Ry = FwdPrevLayer * FwdVWY;
-            optimization.popPipeliningFactor();
-        }
-        else {
-            optimization.pushPipeliningFactor(Def.PipelineFactorMult);
-            DFEVector<DFEVar> mult_Ry_part1 = FwdPrevRyLayer * FwdWGridVec[Y].cast(FwdPrevRyLayer.getType());
-            DFEVector<DFEVar> mult_Ry_part2 = FwdPrevLayer * FwdVWGridVec[Y].cast(FwdPrevLayer.getType());
-            optimization.popPipeliningFactor();
-            mult_Ry = mult_Ry_part1 + mult_Ry_part2.cast(mult_Ry_part1.getType());
-        }
+        optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
+        DFEVector<DFEVar> mult_Ry = mult_Ry_part1 + mult_Ry_part2.cast(mult_Ry_part1.getType());
         // Cast Multiplication Result into AccType for Accumulation
         DFEVector<DFEVar>  mult_y_Acc =  mult_y.cast(new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks));
         DFEVector<DFEVar> mult_Ry_Acc = mult_Ry.cast(new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks));
-        optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
-        DFEVar toAccumulator_y  = TreeReduce.reduce(new Add<DFEVar>(),  mult_y_Acc.getElementsAsList());
-        DFEVar toAccumulator_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry_Acc.getElementsAsList());
-        DFEVar sum_y  = Reductions.accumulator.makeAccumulator(toAccumulator_y,  FwdAccParam);
-        DFEVar sum_Ry = Reductions.accumulator.makeAccumulator(toAccumulator_Ry, FwdAccParam);
+        DFEVar MultAdd_y  = TreeReduce.reduce(new Add<DFEVar>(),  mult_y_Acc.getElementsAsList());
+        DFEVar MultAdd_Ry = TreeReduce.reduce(new Add<DFEVar>(), mult_Ry_Acc.getElementsAsList());
         // Cast Bias and VBias into AccType to derive pre-activated value
-        DFEVar prevActivated_y  = sum_y  +  Bias[Y].cast(Def.AccType);
-        DFEVar prevActivated_Ry = sum_Ry + VBias[Y].cast(Def.AccType);
         optimization.popPipeliningFactor();
-        // For Debug
-//        PrevAcY[Y]  <== prevActivated_y;
-//        PrevAcRy[Y] <== prevActivated_Ry;
-        // Cast Activated Result Back into yType and RyType for next layer
+        NewPreAc_y[Y]  <== isFirstRow ? MultAdd_y  +  Bias[Y].cast(Def.AccType) : MultAdd_y  + Temp_y[Y];
+        NewPreAc_Ry[Y] <== isFirstRow ? MultAdd_Ry + VBias[Y].cast(Def.AccType) : MultAdd_Ry + Temp_Ry[Y];
+    }
+
+    // Prepare Write Back Data
+    OffsetExpr Offset_y  = stream.makeOffsetAutoLoop("MidLayer"+ID+"Offset_y");
+    OffsetExpr Offset_Ry = stream.makeOffsetAutoLoop("MidLayer"+ID+"Offset_Ry");
+    DFEVector<DFEVar> TempWrData_y  = AccVecType.newInstance(this);
+    DFEVector<DFEVar> TempWrData_Ry = AccVecType.newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        TempWrData_y[Y]  <== stream.offset(NewPreAc_y[Y],  -Offset_y);
+        TempWrData_Ry[Y] <== stream.offset(NewPreAc_Ry[Y], -Offset_Ry);
+    }
+    DFEVar TempWrAddr_y  = stream.offset(FwdColAddr, -Offset_y);
+    DFEVar TempWrAddr_Ry = stream.offset(FwdColAddr, -Offset_Ry);
+    DFEVar TempWrEn_y    = stream.offset(FwdColAddrValid, -Offset_y);
+    DFEVar TempWrEn_Ry   = stream.offset(FwdColAddrValid, -Offset_Ry);
+
+
+    // Temp Result of y and Ry
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
+        // Temp y
+        Memory<DFEVar> BRAM_y = mem.alloc(Def.AccType, Math.max(OutBlockDim,2));
+        Temp_y[Y] <== BRAM_y.read(FwdColAddr);
+        BRAM_y.port(TempWrAddr_y, TempWrData_y[Y], TempWrEn_y, RamWriteMode.WRITE_FIRST);
+        // Temp Ry
+        Memory<DFEVar> BRAM_Ry = mem.alloc(Def.AccType, Math.max(OutBlockDim,2));
+        Temp_Ry[Y] <== BRAM_Ry.read(FwdColAddr);
+        BRAM_Ry.port(TempWrAddr_Ry, TempWrData_Ry[Y], TempWrEn_Ry, RamWriteMode.WRITE_FIRST);
+    }
+
+
+    // Apply Activation Function
+    YVec  = (new DFEVectorType<DFEVar>(Def.yType,  NumOutBlocks)).newInstance(this);
+    RyVec = (new DFEVectorType<DFEVar>(Def.RyType, NumOutBlocks)).newInstance(this);
+    for (int Y=0; Y<NumOutBlocks; ++Y) {
         switch (AcFunc) {
             case 't': {
-                DFEVar Activated_y = tanh(prevActivated_y).cast(Def.RyType);
+                DFEVar Activated_y = tanh(NewPreAc_y[Y]).cast(Def.RyType);
                  YVec[Y] <== Activated_y.cast(Def.yType);
                 optimization.pushPipeliningFactor(Def.PipelineFactorMult);
-                RyVec[Y] <== prevActivated_Ry.cast(Def.RyType) * (1-Activated_y) * (1+Activated_y);
+                RyVec[Y] <== NewPreAc_Ry[Y].cast(Def.RyType) * (1-Activated_y) * (1+Activated_y);
                 optimization.popPipeliningFactor();
                 break;
             }
             case 'l': {
-                 YVec[Y] <== prevActivated_y.cast(Def.yType);
-                RyVec[Y] <== prevActivated_Ry.cast(Def.RyType);
+                 YVec[Y] <== NewPreAc_y[Y].cast(Def.yType);
+                RyVec[Y] <== NewPreAc_Ry[Y].cast(Def.RyType);
                 break;
             }
             default: {
-                throw new IllegalArgumentException("Layer["+ID+"]: Activation Function "+AcFunc+" unsupported.");
+                throw new IllegalArgumentException("MidLayer["+ID+"]: Activation Function "+AcFunc+" unsupported.");
 			}
         }
     }
-
-
 
 /*
     // For Number Representation Optimisation
     // Check Minimum and Maximum values of Y and Ry
     DFEVar beginReport = beginBwdProp;
-    debug.simPrintf(beginReport, "Layer[%d] PrevAcY  Range = [%f, %f]\n", ID, Reductions.streamMin(PrevAcY), Reductions.streamMax(PrevAcY));
-    debug.simPrintf(beginReport, "Layer[%d] PrevAcRy Range = [%f, %f]\n", ID, Reductions.streamMin(PrevAcRy), Reductions.streamMax(PrevAcRy));
-    debug.simPrintf(beginReport, "Layer[%d] RyVec    Range = [%f, %f]\n", ID, Reductions.streamMin(RyVec), Reductions.streamMax(RyVec));
+    debug.simPrintf(beginReport, "Layer[%d] NewPreAc_y  Range = [%f, %f]\n", ID, Reductions.streamMin(NewPreAc_y), Reductions.streamMax(NewPreAc_y));
+    debug.simPrintf(beginReport, "Layer[%d] NewPreAc_Ry Range = [%f, %f]\n", ID, Reductions.streamMin(NewPreAc_Ry), Reductions.streamMax(NewPreAc_Ry));
+    debug.simPrintf(beginReport, "Layer[%d] RyVec       Range = [%f, %f]\n", ID, Reductions.streamMin(RyVec), Reductions.streamMax(RyVec));
+*/
+
+
+/*
+    // For Simulation
+    debug.simPrintf(WeightInitReset, "[%4d] Layer[%d] Begin Init Weights...\n", control.count.simpleCounter(32), ID);
+    debug.simPrintf(BiasInitReset, "[%4d] Layer[%d] Begin Init Bias...\n", control.count.simpleCounter(32), ID);
+    debug.simPrintf(FwdValid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, WReadAddr, FwdColAddr, YVec[0], YVec[1], YVec[2], YVec[3], FwdColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], FwdValid);
 */
 
 /*
-    // For Simulation Debug
-    debug.simPrintf(WeightInitReset, "[%4d] Layer[%d] Begin Init Weights...\n", control.count.simpleCounter(32), ID);
-    debug.simPrintf(BiasInitReset, "[%4d] Layer[%d] Begin Init Bias...\n", control.count.simpleCounter(32), ID);
-
-    if (ID==0) {
-        // Check PreActivated Value - Assuming NumOutBlocks=8 (AntTest)
-        // debug.simPrintf(FwdValidValid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:7][%2d]=(%.12f,%.12f,%.12f,%.12f, %.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, WReadAddr, FwdColAddr, PrevAcY[0], PrevAcY[1], PrevAcY[2], PrevAcY[3], PrevAcY[4], PrevAcY[5], PrevAcY[6], PrevAcY[7], FwdValidValid);
-
-        // Check Activated Value - Assuming NumOutBlocks=8 (AntTest)
-        // debug.simPrintf(FwdValidValid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:7][%2d]=(%.12f,%.12f,%.12f,%.12f, %.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, WReadAddr, FwdColAddr, YVec[0], YVec[1], YVec[2], YVec[3], YVec[4], YVec[5], YVec[6], YVec[7], FwdValid);
-
-        // Check Computation - Assuming NumOutBlock=4 (SwimmerTest)
-        // debug.simPrintf(isFwdCalculating, "[%4d] W[%2d][%2d]=W[%2d] | W[0:3][0]=(%f, %f, %f, %f), prev=(%f, %f, %f, %f) | PreAc_y = %f, y=%f | Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, WReadAddr, FwdWGridVec[0][0], FwdWGridVec[0][1], FwdWGridVec[0][2], FwdWGridVec[0][3], FwdPrevLayer[0], FwdPrevLayer[1], FwdPrevLayer[2], FwdPrevLayer[3], PrevAcY[0], YVec[0], FwdValid);
-
-//        debug.simPrintf(FwdValid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, WReadAddr, FwdColAddr, YVec[0], YVec[1], YVec[2], YVec[3], FwdColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], FwdValid);
-    }
-*/
-
-
     // For jUnit Tests
-//    debug.simPrintf(FwdValid, "[%4d] W[%2d][%2d] RdAddr=%2d | Y[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Ry[0:3][%2d]=(%.12f,%.12f,%.12f,%.12f), Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, WReadAddr, FwdColAddr, YVec[0], YVec[1], YVec[2], YVec[3], FwdColAddr, RyVec[0], RyVec[1], RyVec[2], RyVec[3], FwdValid);
+    debug.simPrintf(FwdColAddrValid, "[%3d] W[%d][%d]=[%.2f, %.2f, %.2f, %.2f], IN=[%.2f, %.2f, %.2f, %.2f], Bias[%d]=%.2f, Temp[%d]=>%2.6f | PreAc_y[0]=%2.6f => y_0=%f, Valid=%d\n", control.count.simpleCounter(32), FwdRowAddr, FwdColAddr, FwdWGridVec[0][0], FwdWGridVec[0][1], FwdWGridVec[0][2], FwdWGridVec[0][3], FwdPrevLayer[0], FwdPrevLayer[1], FwdPrevLayer[2], FwdPrevLayer[3], FwdColAddr, Bias[0], FwdColAddr, Temp_y[0], NewPreAc_y[0], YVec[0], FwdValid);
+*/
 
 
 
@@ -624,6 +629,11 @@ class Layer extends KernelLib{
 
     // Bypass Prev Y Layer to output
     BwdYVec = BwdPrevLayer;
+
+    // Accumulator Parameter
+    Accumulator.Params BwdAccParam = Reductions.accumulator.makeAccumulatorConfig(Def.AccType)
+                                                     .withEnable(isBwdCalculating)
+                                                     .withClear(stream.offset(BwdColAddr, 1)===0);
 
     // De-Activation
     DFEVector<DFEVar> RGLayer_original = (new DFEVectorType<DFEVar>(Def.RGType, NumOutBlocks)).newInstance(this);
@@ -633,7 +643,7 @@ class Layer extends KernelLib{
             case 't': {
                 DFEVar nextLayerY = BwdNextLayer[Y].cast(Def.RGType);
                 optimization.pushPipeliningFactor(Def.PipelineFactorMult);
-                RGLayer_original[Y] <== BwdNextRGLayer[Y] * (1-nextLayerY) * (1+nextLayerY);
+                RGLayer_original[Y] <== BwdNextRGLayer[Y] * (1-nextLayerY)*(1+nextLayerY);
                 optimization.popPipeliningFactor();
                 break;
             }
@@ -652,12 +662,14 @@ class Layer extends KernelLib{
         RGLayerIndividual[Y] = new FanoutLimiter<DFEVar>(RGLayer_original[Y], Def.MaxFanout);
     }
 
-
     // Calculate RGVec when this layer isn't first layer
-    if (ID==0) RGVec = constant.vect(NumInBlocks, Def.RGType, 0);
+    RGVec = RGVecType.newInstance(this);
+    // For Debug  
+//    DFEVector<DFEVar> thisStepMult = (new DFEVectorType<DFEVar>(Def.AccType, NumInBlocks)).newInstance(this);
+    if (ID==0) {
+        for (int X=0; X<NumInBlocks; ++X) RGVec[X] <== constant.var(Def.RGType, 0);
+    }
     else {
-        DFEVector<DFEVar> Temp_RG = RGVecType.newInstance(this);
-        DFEVector<DFEVar> New_RG  = RGVecType.newInstance(this);
         for (int X=0; X<NumInBlocks; ++X) {
             // Calculate Multiplication in RGType
             DFEVector<DFEVar> RGLayerX  = RGLayer.get();
@@ -665,52 +677,17 @@ class Layer extends KernelLib{
             optimization.pushPipeliningFactor(Def.PipelineFactorMult);
             DFEVector<DFEVar> mult_RG = RGLayerX * BwdWGridX;
             optimization.popPipeliningFactor();
-            // Tree Reduce
+            // Cast Multiplication Result into AccType for Accumulation
             optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
             DFEVector<DFEVar> mult_RG_Acc = mult_RG.cast(new DFEVectorType<DFEVar>(Def.AccType, NumOutBlocks));
-            DFEVar MultAdd_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG_Acc.getElementsAsList());
+            DFEVar toAccumulator_RG = TreeReduce.reduce(new Add<DFEVar>(), mult_RG_Acc.getElementsAsList());
+            DFEVar sum_RG = Reductions.accumulator.makeAccumulator(toAccumulator_RG, BwdAccParam);
             optimization.popPipeliningFactor();
-            New_RG[X] <== isFirstCol ? MultAdd_RG.cast(Def.RGType) : MultAdd_RG.cast(Def.RGType) + Temp_RG[X];
-        }    
-
-        // Prepare Write Back Data
-        OffsetExpr Offset_RG = stream.makeOffsetAutoLoop("Layer"+ID+"Offset_RG");
-        DFEVector<DFEVar> TempWrData_RG = RGVecType.newInstance(this);
-        for (int X=0; X<NumInBlocks; ++X) {
-            TempWrData_RG[X] <== stream.offset(New_RG[X],     -Offset_RG);
+            // Cast Result into RGType
+            RGVec[X] <== sum_RG.cast(Def.RGType);
+            // For Debug
+//            thisStepMult[X] <== toAccumulator_RG;
         }
-        DFEVar TempWrAddr_RG = stream.offset(BwdRowAddr,      -Offset_RG);
-        DFEVar TempWrEn_RG   = stream.offset(BwdRowAddrValid, -Offset_RG);
-
-        // Temp Result of RG
-        for (int X=0; X<NumInBlocks; ++X) {
-            // Temp RG
-            Memory<DFEVar> BRAM_RG = mem.alloc(Def.RGType, Math.max(InBlockDim,2));
-            Temp_RG[X] <== BRAM_RG.read(BwdRowAddr);
-            BRAM_RG.port(TempWrAddr_RG, TempWrData_RG[X], TempWrEn_RG, RamWriteMode.WRITE_FIRST);
-        }
-        
-        // Final Result
-        RGVec = New_RG;
-
-/*
-    // For Number Representation Optimisation
-    // Check Minimum and Maximum values of RG
-    debug.simPrintf(beginReport, "Layer[%d] RGLayer Range = [%f, %f]\n", ID, Reductions.streamMin(RGLayer), Reductions.streamMax(RGLayer));
-    debug.simPrintf(beginReport, "Layer[%d] New_RG  Range = [%f, %f]\n", ID, Reductions.streamMin(New_RG), Reductions.streamMax(New_RG));
-    debug.simPrintf(beginReport, "Layer[%d] RGVec   Range = [%f, %f]\n", ID, Reductions.streamMin(RGVec), Reductions.streamMax(RGVec));
-*/
-
-        // For Simulation
-        // Debug - Checking De-Activation
-//        debug.simPrintf(isBwdCalculating & BwdRowAddrValid, "[%4d] W[%2d][%2d] RdAddr=%2d, Buf3RdAddr=%d | RG_3[0:3]=(%f,%f,%f,%f), y_3[0:3]=(%f, %f, %f, %f) | RGLayer[0:3][%2d]=(%f,%f,%f,%f)\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, WPortAddr, BwdNextLayerReadOffsetAddr, BwdNextRGLayer[0], BwdNextRGLayer[1], BwdNextRGLayer[2], BwdNextRGLayer[3], BwdNextLayer[0], BwdNextLayer[1], BwdNextLayer[2], BwdNextLayer[3], BwdColAddr, RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3]);
-
-        // Debug - Checking RG Calculation - Row[0]Col[:]
-//        debug.simPrintf(BwdRowAddrValid, "[%4d] W[0][0:3][%d][%d]=(%.12f, %f, %f, %f), RGLayer[0:3]=(%.12f, %f, %f, %f), Temp_RG[0]=>%.12f | New_RG[0]=%.12f, Valid=%d\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, BwdWGridVec[0][0], BwdWGridVec[0][1], BwdWGridVec[0][2], BwdWGridVec[0][3], RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3], Temp_RG[0], New_RG[0], BwdValid);
-
-        // Debug - Checking Back Propagation Results
-//        debug.simPrintf(BwdValid, "[%4d] RG_%d[0:3]=(%.12f, %.12f, %.12f, %.12f)\n", control.count.simpleCounter(32), constant.var(dfeUInt(2), ID), RGVec[0], RGVec[1], RGVec[2], RGVec[3]);
-
     }
     
     // Calculate RGW
@@ -724,7 +701,7 @@ class Layer extends KernelLib{
             optimization.popPipeliningFactor();
             // Do Accumulation in RGW Type
             optimization.pushPipeliningFactor(Def.PipelineFactorDefault);
-            DFEVar NewRGW  = BwdRGWRdGridVec[X][Y] + thisRGW.cast(Def.RGWType);
+            DFEVar NewRGW = BwdRGWRdGridVec[X][Y] + thisRGW.cast(Def.RGWType);
             optimization.popPipeliningFactor();
             BwdRGWWrGridVec[X][Y] <== isInitW.get() ? constant.var(Def.RGWType, 0) : stream.offset(NewRGW, -Offset_RGW);
         }
@@ -755,11 +732,17 @@ class Layer extends KernelLib{
 */
 
 
+
     // For Simulation
+    // Debug - Checking De-Activation
+//    debug.simPrintf(isBwdCalculating, "[%4d] W[%2d][%2d]=W[%2d] Buf2RdAddr=%2d | RG_2[0:3]=(%f, %f, %f, %f), y2[0:3]=(%f, %f, %f, %f) | RGLayer[0:3][%2d]=(%f, %f, %f, %f)\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, WPortAddr, BwdNextLayerReadOffsetAddr, BwdNextRGLayer[0], BwdNextRGLayer[1], BwdNextRGLayer[2], BwdNextRGLayer[3], BwdNextLayer[0], BwdNextLayer[1], BwdNextLayer[2], BwdNextLayer[3], BwdColAddr, RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3]);
+
     // Debug - Checking RG Calculation - Row[0]Col[:]
-//    debug.simPrintf(isRGWUpdating, "[%4d] PrevLayer[0]=%.12f, RGLayer[0:3]=(%.12f, %.12f, %.12f, %.12f), thisRGW=(%.12f, %.12f, %.12f, %.12f)\n                            OldRGW[%d][0:3][%d][%d]=>(%.12f, %.12f, %.12f, %.12f) | NewRGW=(%.12f, %.12f, %.12f, %.12f), EnWrite=%d\n\n", control.count.simpleCounter(32), BwdPrevLayer[0], RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3], BwdPrevLayer[0]*RGLayer[0], BwdPrevLayer[0]*RGLayer[1], BwdPrevLayer[0]*RGLayer[2], BwdPrevLayer[0]*RGLayer[3], constant.var(dfeUInt(4), ID), BwdRowAddr, BwdColAddr, BwdRGWRdGridVec[0][0], BwdRGWRdGridVec[0][1], BwdRGWRdGridVec[0][2], BwdRGWRdGridVec[0][3], BwdRGWWrGridVec[0][0], BwdRGWWrGridVec[0][1], BwdRGWWrGridVec[0][2], BwdRGWWrGridVec[0][3], BwdRGWWrEn);
+//    debug.simPrintf(isBwdCalculating, "[%4d] W[%2d][%2d]=W[%2d] | W[0:3][0]=(%f, %f, %f, %f), RG=(%f, %f, %f, %f) => %.12f | RG_1[0]=%.12f, V=%d\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, WPortAddr, BwdWGridVec[0][0], BwdWGridVec[0][1], BwdWGridVec[0][2], BwdWGridVec[0][3], RGLayer[0], RGLayer[1], RGLayer[2], RGLayer[3], thisStepMult[0], RGVec[0], BwdValid);
+//    debug.simPrintf(BwdValid, "\n");
 
-
+    // Debug - Checking BwdPrevLayer
+//    debug.simPrintf(isBwdCalculating, "[%4d] W[%2d][%2d]=W[%2d] | RGW[0:3][0]=>(%f, %f, %f, %f), y_1[0]=%.12f | RGW[0:3][0]<=(%f, %f, %f, %f)\n", control.count.simpleCounter(32), BwdRowAddr, BwdColAddr, WPortAddr, BwdRGWRdGridVec[0][0], BwdRGWRdGridVec[0][1], BwdRGWRdGridVec[0][2], BwdRGWRdGridVec[0][3], BwdPrevLayer[0], BwdRGWWrGridVec[0][0], BwdRGWWrGridVec[0][1], BwdRGWWrGridVec[0][2], BwdRGWWrGridVec[0][3]);
 
 
 
@@ -769,7 +752,7 @@ class Layer extends KernelLib{
 
 
 
-    // RGW Read Back Data WVecType
+    // RGW Read Back Data
     DFEVector<DFEVar> RGWReadBackVec = (new DFEVectorType<DFEVar>(Def.RGWType, NumInBlocks)).newInstance(this);
     for (int X=0; X<NumInBlocks; ++X) {
         RGWReadBackVec[X] <== control.mux(RGReadColBaseAddr, BwdRGWRdGridVec[X].getElementsAsList());
@@ -781,11 +764,6 @@ class Layer extends KernelLib{
 
     // RG Read Back Data
     RGReadBackData = isReadingBackRGW ? RGWReadBackData.cast(Def.ReadBackType) : RGBReadBackData.cast(Def.ReadBackType);
-
-
-    // For Simulation
-    // Debug - Checking Read Back
-//if(ID==2)        debug.simPrintf(isReadingBackRGW, "[%4d] Reading RGW Block X=[%d] Y=[%d], Row=[%d] Col=[%d], BlockAddr=%d, RGW=%.12f\n", control.count.simpleCounter(32), RGReadRowBaseAddr, RGReadColBaseAddr, RGReadRowOffsetAddr, RGReadColOffsetAddr, RGWReadAddr, RGWReadBackData);
 
 
 	}
@@ -809,6 +787,5 @@ class Layer extends KernelLib{
         optimization.popPipeliningFactor();
         return Result;
     }
-
 
 }
